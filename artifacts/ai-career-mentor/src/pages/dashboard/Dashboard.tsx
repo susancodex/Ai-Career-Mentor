@@ -7,6 +7,7 @@ import { getResumes } from '../../api/resumes';
 import { getCareerPaths } from '../../api/careers';
 import { getJobMatches } from '../../api/jobs';
 import { getRoadmaps } from '../../api/learning';
+import { motion } from 'framer-motion';
 
 const quickLinks = [
   { to: '/resume', label: 'Resume', icon: FileText, description: 'Upload your resume for AI analysis' },
@@ -15,6 +16,21 @@ const quickLinks = [
   { to: '/interview', label: 'Interview Prep', icon: MessageSquare, description: 'Practice with AI-generated questions' },
   { to: '/learning', label: 'Learning Roadmap', icon: BookOpen, description: 'Follow your personalized learning plan' },
 ];
+
+const containerVariants = {
+  hidden: { opacity: 0 },
+  show: {
+    opacity: 1,
+    transition: {
+      staggerChildren: 0.1
+    }
+  }
+};
+
+const itemVariants = {
+  hidden: { opacity: 0, y: 12 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.3 } }
+};
 
 function StatCard({
   label,
@@ -30,16 +46,16 @@ function StatCard({
   color: string;
 }) {
   return (
-    <Card>
+    <Card className="h-full">
       <CardContent className="p-5">
         <div className="flex items-center gap-4">
-          <div className={`p-3 rounded-lg ${color}`}>
-            <Icon className="w-5 h-5" />
+          <div className={`p-3 rounded-xl ${color} bg-opacity-10`}>
+            <Icon className="w-6 h-6" />
           </div>
           <div>
-            <p className="text-sm text-gray-500">{label}</p>
-            <p className="text-2xl font-bold text-gray-900">{value}</p>
-            {sub && <p className="text-xs text-gray-400 mt-0.5">{sub}</p>}
+            <p className="text-sm font-medium text-slate-500">{label}</p>
+            <p className="text-2xl font-bold text-slate-900 tracking-tight">{value}</p>
+            {sub && <p className="text-xs text-slate-400 mt-0.5">{sub}</p>}
           </div>
         </div>
       </CardContent>
@@ -68,101 +84,106 @@ export function Dashboard() {
   const topPath = pathsQuery.data?.sort((a, b) => b.match_score - a.match_score)[0];
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Welcome back, {user?.full_name || 'there'}!</h1>
-        <p className="text-gray-500 mt-1">Here's your career progress at a glance.</p>
-      </div>
+    <motion.div 
+      variants={containerVariants}
+      initial="hidden"
+      animate="show"
+      className="space-y-8"
+    >
+      <motion.div variants={itemVariants}>
+        <h1 className="text-3xl font-bold tracking-tight text-slate-900">Welcome back, {user?.full_name || 'there'}!</h1>
+        <p className="text-slate-500 mt-1.5 text-lg">Here's your career progress at a glance.</p>
+      </motion.div>
 
       {/* Stats row */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <motion.div variants={itemVariants} className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
         <StatCard
           label="Resumes"
           value={resumeCount}
           icon={FileText}
           sub={resumeCount === 1 ? 'uploaded' : 'uploaded'}
-          color="bg-blue-50 text-blue-600"
+          color="bg-primary text-primary"
         />
         <StatCard
           label="Career Paths"
           value={pathCount}
           icon={TrendingUp}
           sub={topPath ? `Top: ${topPath.match_score}% match` : 'none yet'}
-          color="bg-purple-50 text-purple-600"
+          color="bg-purple-500 text-purple-500"
         />
         <StatCard
           label="Job Matches"
           value={jobCount}
           icon={Briefcase}
           sub={topJob ? `Best fit: ${topJob.fit_score}%` : 'none yet'}
-          color="bg-green-50 text-green-600"
+          color="bg-emerald-500 text-emerald-500"
         />
         <StatCard
           label="Learning"
           value={totalResources > 0 ? `${progressPct}%` : '—'}
           icon={Award}
           sub={totalResources > 0 ? `${completedResources}/${totalResources} done` : 'no roadmap yet'}
-          color="bg-orange-50 text-orange-600"
+          color="bg-amber-500 text-amber-500"
         />
-      </div>
+      </motion.div>
 
       {/* Top matches callout */}
       {(topPath || topJob) && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <motion.div variants={itemVariants} className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {topPath && (
-            <Link to="/careers">
-              <Card className="hover:shadow-md transition-shadow border-l-4 border-l-purple-500">
-                <CardContent className="p-5">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Target className="w-4 h-4 text-purple-600" />
-                    <span className="text-xs font-semibold text-purple-600 uppercase tracking-wide">Top Career Path</span>
+            <Link to="/careers" className="block outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-xl">
+              <Card className="hover:shadow-md transition-all h-full border-l-4 border-l-purple-500">
+                <CardContent className="p-6">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Target className="w-5 h-5 text-purple-600" />
+                    <span className="text-xs font-bold text-purple-600 uppercase tracking-wider">Top Career Path</span>
                   </div>
-                  <p className="font-semibold text-gray-900">{topPath.title}</p>
-                  <p className="text-sm text-gray-500 mt-1 line-clamp-2">{topPath.description}</p>
-                  <span className="inline-block mt-2 text-xs font-medium bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full">
-                    {topPath.match_score}% match
+                  <p className="text-xl font-bold text-slate-900">{topPath.title}</p>
+                  <p className="text-sm text-slate-500 mt-2 line-clamp-2 leading-relaxed">{topPath.description}</p>
+                  <span className="inline-flex items-center justify-center mt-4 text-xs font-bold bg-purple-100 text-purple-800 px-3 py-1 rounded-md">
+                    {topPath.match_score}% Match
                   </span>
                 </CardContent>
               </Card>
             </Link>
           )}
           {topJob && (
-            <Link to="/jobs">
-              <Card className="hover:shadow-md transition-shadow border-l-4 border-l-green-500">
-                <CardContent className="p-5">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Briefcase className="w-4 h-4 text-green-600" />
-                    <span className="text-xs font-semibold text-green-600 uppercase tracking-wide">Best Job Match</span>
+            <Link to="/jobs" className="block outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-xl">
+              <Card className="hover:shadow-md transition-all h-full border-l-4 border-l-emerald-500">
+                <CardContent className="p-6">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Briefcase className="w-5 h-5 text-emerald-600" />
+                    <span className="text-xs font-bold text-emerald-600 uppercase tracking-wider">Best Job Match</span>
                   </div>
-                  <p className="font-semibold text-gray-900">{topJob.title}</p>
-                  <p className="text-sm text-gray-500 mt-1">{topJob.company} · {topJob.location}</p>
-                  <span className="inline-block mt-2 text-xs font-medium bg-green-100 text-green-800 px-2 py-0.5 rounded-full">
-                    {topJob.fit_score}% fit
+                  <p className="text-xl font-bold text-slate-900">{topJob.title}</p>
+                  <p className="text-sm text-slate-500 mt-2 leading-relaxed">{topJob.company} · {topJob.location}</p>
+                  <span className="inline-flex items-center justify-center mt-4 text-xs font-bold bg-emerald-100 text-emerald-800 px-3 py-1 rounded-md">
+                    {topJob.fit_score}% Fit
                   </span>
                 </CardContent>
               </Card>
             </Link>
           )}
-        </div>
+        </motion.div>
       )}
 
       {/* Quick links */}
-      <div>
-        <h2 className="text-base font-semibold text-gray-700 mb-3">Quick Access</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <motion.div variants={itemVariants}>
+        <h2 className="text-lg font-bold tracking-tight text-slate-900 mb-4">Quick Access</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {quickLinks.map((link) => (
-            <Link key={link.to} to={link.to} className="group">
-              <Card className="h-full hover:shadow-md transition-shadow">
+            <Link key={link.to} to={link.to} className="group outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-xl">
+              <Card className="h-full hover:shadow-md transition-all hover:border-primary/20 bg-white">
                 <CardContent className="p-6">
                   <div className="flex items-start gap-4">
-                    <div className="p-3 rounded-lg bg-blue-50 group-hover:bg-blue-100 transition-colors">
-                      <link.icon className="w-6 h-6 text-blue-600" />
+                    <div className="p-3 rounded-xl bg-primary/10 text-primary group-hover:bg-primary group-hover:text-white transition-colors duration-300">
+                      <link.icon className="w-6 h-6" />
                     </div>
                     <div>
-                      <h3 className="font-semibold text-gray-900 group-hover:text-blue-600 transition-colors">
+                      <h3 className="font-bold text-slate-900 group-hover:text-primary transition-colors duration-300">
                         {link.label}
                       </h3>
-                      <p className="text-sm text-gray-500 mt-1">{link.description}</p>
+                      <p className="text-sm text-slate-500 mt-1 leading-relaxed">{link.description}</p>
                     </div>
                   </div>
                 </CardContent>
@@ -170,7 +191,7 @@ export function Dashboard() {
             </Link>
           ))}
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }

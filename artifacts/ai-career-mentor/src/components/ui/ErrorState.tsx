@@ -13,11 +13,17 @@ export function ErrorState({
   onRetry,
 }: ErrorStateProps) {
   return (
-    <div className="flex flex-col items-center justify-center p-8 text-center">
-      <AlertTriangle className="w-12 h-12 text-red-500 mb-4" />
-      <h3 className="text-lg font-semibold text-gray-900 mb-2">{title}</h3>
-      <p className="text-sm text-gray-500 mb-4 max-w-md">{message}</p>
-      {onRetry && <Button onClick={onRetry}>Try Again</Button>}
+    <div className="flex flex-col items-center justify-center p-12 text-center bg-rose-50/30 rounded-2xl border border-dashed border-rose-200">
+      <div className="w-16 h-16 bg-white rounded-2xl shadow-sm border border-rose-100 flex items-center justify-center mb-6">
+        <AlertTriangle className="w-8 h-8 text-rose-500" />
+      </div>
+      <h3 className="text-lg font-bold text-slate-900 tracking-tight mb-2">{title}</h3>
+      <p className="text-sm text-slate-500 mb-6 max-w-md leading-relaxed">{message}</p>
+      {onRetry && (
+        <Button variant="secondary" onClick={onRetry}>
+          Try Again
+        </Button>
+      )}
     </div>
   );
 }
