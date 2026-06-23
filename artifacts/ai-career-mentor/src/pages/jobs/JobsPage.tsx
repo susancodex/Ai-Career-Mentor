@@ -1,19 +1,55 @@
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getJobMatches, updateJobMatch } from '../../api/jobs';
+import { generateJobMatches, getJobMatches, updateJobMatch } from '../../api/jobs';
 import { Card, CardContent } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { SkeletonCard } from '../../components/ui/Skeleton';
 import { ErrorState } from '../../components/ui/ErrorState';
 import { EmptyState } from '../../components/ui/EmptyState';
-import { Briefcase, ExternalLink, Bookmark, CheckCircle, XCircle } from 'lucide-react';
+import { Briefcase, ExternalLink, Bookmark, CheckCircle, XCircle, AlertTriangle, Sparkles } from 'lucide-react';
 
 export function JobsPage() {
   const queryClient = useQueryClient();
+  const [rateLimitError, setRateLimitError] = useState<string | null>(null);
+  const [retryAfter, setRetryAfter] = useState(0);
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  useEffect(() => {
+    if (retryAfter <= 0) return;
+    const timer = setInterval(() => setRetryAfter((s) => Math.max(0, s - 1)), 1000);
+    return () => clearInterval(timer);
+  }, [retryAfter]);
+
   const jobsQuery = useQuery({
     queryKey: ['job-matches'],
     queryFn: getJobMatches,
     staleTime: 60 * 1000,
+    refetchInterval: isGenerating ? 3000 : false,
+    refetchIntervalInBackground: false,
+  });
+
+  const generateMutation = useMutation({
+    mutationFn: () => generateJobMatches('resume-1'),
+    onMutate: () => {
+      setRateLimitError(null);
+      setIsGenerating(true);
+    },
+    onSuccess: () => {
+      setTimeout(() => {
+        setIsGenerating(false);
+        queryClient.invalidateQueries({ queryKey: ['job-matches'] });
+      }, 2000);
+    },
+    onError: (error: Error) => {
+      setIsGenerating(false);
+      if (error.message.includes('429') || error.message.includes('503') || error.message.includes('busy')) {
+        setRateLimitError('The AI is busy right now. Try again in a moment.');
+        setRetryAfter(30);
+      } else {
+        setRateLimitError(error.message || 'Generation failed. Please try again.');
+      }
+    },
   });
 
   const updateMutation = useMutation({
@@ -46,12 +82,46 @@ export function JobsPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-gray-900">Job Matches</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-gray-900">Job Matches</h1>
+        <Button
+          onClick={() => generateMutation.mutate()}
+          disabled={generateMutation.isPending || isGenerating || retryAfter > 0}
+          isLoading={generateMutation.isPending || isGenerating}
+        >
+          <Sparkles className="w-4 h-4 mr-2" />
+          {retryAfter > 0 ? `Retry in ${retryAfter}s` : 'Find Matches'}
+        </Button>
+      </div>
+
+      {rateLimitError && (
+        <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-yellow-600 mt-0.5 shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-yellow-900">{rateLimitError}</p>
+            {retryAfter > 0 && (
+              <p className="text-xs text-yellow-700 mt-1">
+                You can retry in {retryAfter} second{retryAfter !== 1 ? 's' : ''}.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       {jobs.length === 0 ? (
         <EmptyState
           title="No job matches yet"
-          message="Upload your resume and generate job matches to see opportunities tailored to your profile."
+          message="Let the AI find jobs that match your skills and experience from your resume."
+          action={
+            <Button
+              onClick={() => generateMutation.mutate()}
+              disabled={generateMutation.isPending || isGenerating || retryAfter > 0}
+              isLoading={generateMutation.isPending || isGenerating}
+            >
+              <Sparkles className="w-4 h-4 mr-2" />
+              {retryAfter > 0 ? `Retry in ${retryAfter}s` : 'Find Job Matches'}
+            </Button>
+          }
         />
       ) : (
         <div className="grid gap-4">

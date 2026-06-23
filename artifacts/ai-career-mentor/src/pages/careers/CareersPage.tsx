@@ -1,18 +1,36 @@
-import { useQuery } from '@tanstack/react-query';
-import { getCareerPaths, getSkillGaps } from '../../api/careers';
+import { useEffect, useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { generateCareerPaths, getCareerPaths, getSkillGaps } from '../../api/careers';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
+import { Button } from '../../components/ui/Button';
 import { SkeletonCard } from '../../components/ui/Skeleton';
 import { ErrorState } from '../../components/ui/ErrorState';
 import { EmptyState } from '../../components/ui/EmptyState';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar } from 'recharts';
-import { TrendingUp, Target } from 'lucide-react';
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar,
+} from 'recharts';
+import { TrendingUp, Target, AlertTriangle, Sparkles } from 'lucide-react';
 
 export function CareersPage() {
+  const queryClient = useQueryClient();
+  const [rateLimitError, setRateLimitError] = useState<string | null>(null);
+  const [retryAfter, setRetryAfter] = useState(0);
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  useEffect(() => {
+    if (retryAfter <= 0) return;
+    const timer = setInterval(() => setRetryAfter((s) => Math.max(0, s - 1)), 1000);
+    return () => clearInterval(timer);
+  }, [retryAfter]);
+
   const pathsQuery = useQuery({
     queryKey: ['career-paths'],
     queryFn: getCareerPaths,
     staleTime: 60 * 1000,
+    refetchInterval: isGenerating ? 3000 : false,
+    refetchIntervalInBackground: false,
   });
 
   const skillGapQuery = useQuery({
@@ -21,7 +39,31 @@ export function CareersPage() {
     enabled: pathsQuery.isSuccess,
   });
 
-  if (pathsQuery.isLoading || skillGapQuery.isLoading) {
+  const generateMutation = useMutation({
+    mutationFn: () => generateCareerPaths('resume-1'),
+    onMutate: () => {
+      setRateLimitError(null);
+      setIsGenerating(true);
+    },
+    onSuccess: () => {
+      setTimeout(() => {
+        setIsGenerating(false);
+        queryClient.invalidateQueries({ queryKey: ['career-paths'] });
+        queryClient.invalidateQueries({ queryKey: ['skill-gaps', 'resume-1'] });
+      }, 2000);
+    },
+    onError: (error: Error) => {
+      setIsGenerating(false);
+      if (error.message.includes('429') || error.message.includes('503') || error.message.includes('busy')) {
+        setRateLimitError('The AI is busy right now. Try again in a moment.');
+        setRetryAfter(30);
+      } else {
+        setRateLimitError(error.message || 'Generation failed. Please try again.');
+      }
+    },
+  });
+
+  if (pathsQuery.isLoading) {
     return (
       <div className="space-y-6">
         <h1 className="text-2xl font-bold text-gray-900">Career Paths</h1>
@@ -53,7 +95,31 @@ export function CareersPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-gray-900">Career Paths</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-gray-900">Career Paths</h1>
+        <Button
+          onClick={() => generateMutation.mutate()}
+          disabled={generateMutation.isPending || isGenerating || retryAfter > 0}
+          isLoading={generateMutation.isPending || isGenerating}
+        >
+          <Sparkles className="w-4 h-4 mr-2" />
+          {retryAfter > 0 ? `Retry in ${retryAfter}s` : 'Generate Paths'}
+        </Button>
+      </div>
+
+      {rateLimitError && (
+        <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-yellow-600 mt-0.5 shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-yellow-900">{rateLimitError}</p>
+            {retryAfter > 0 && (
+              <p className="text-xs text-yellow-700 mt-1">
+                You can retry in {retryAfter} second{retryAfter !== 1 ? 's' : ''}.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Skill Gap Visualization */}
       {skillGap && (
@@ -126,7 +192,17 @@ export function CareersPage() {
       {paths.length === 0 ? (
         <EmptyState
           title="No career paths yet"
-          message="Upload your resume to generate personalized career path recommendations."
+          message="Click Generate Paths to get AI-powered career recommendations based on your resume."
+          action={
+            <Button
+              onClick={() => generateMutation.mutate()}
+              disabled={generateMutation.isPending || isGenerating || retryAfter > 0}
+              isLoading={generateMutation.isPending || isGenerating}
+            >
+              <Sparkles className="w-4 h-4 mr-2" />
+              {retryAfter > 0 ? `Retry in ${retryAfter}s` : 'Generate Career Paths'}
+            </Button>
+          }
         />
       ) : (
         <div className="space-y-4">

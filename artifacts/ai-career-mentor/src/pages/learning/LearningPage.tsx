@@ -1,18 +1,55 @@
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getRoadmaps, updateResource } from '../../api/learning';
+import { generateRoadmap, getRoadmaps, updateResource } from '../../api/learning';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
+import { Button } from '../../components/ui/Button';
 import { SkeletonCard } from '../../components/ui/Skeleton';
 import { ErrorState } from '../../components/ui/ErrorState';
 import { EmptyState } from '../../components/ui/EmptyState';
-import { BookOpen, CheckCircle, Circle, Clock, ExternalLink } from 'lucide-react';
+import { BookOpen, CheckCircle, Circle, Clock, ExternalLink, AlertTriangle, Sparkles } from 'lucide-react';
 import type { LearningResource } from '../../types';
 
 export function LearningPage() {
   const queryClient = useQueryClient();
+  const [rateLimitError, setRateLimitError] = useState<string | null>(null);
+  const [retryAfter, setRetryAfter] = useState(0);
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  useEffect(() => {
+    if (retryAfter <= 0) return;
+    const timer = setInterval(() => setRetryAfter((s) => Math.max(0, s - 1)), 1000);
+    return () => clearInterval(timer);
+  }, [retryAfter]);
+
   const roadmapsQuery = useQuery({
     queryKey: ['learning-roadmaps'],
     queryFn: getRoadmaps,
     staleTime: 60 * 1000,
+    refetchInterval: isGenerating ? 3000 : false,
+    refetchIntervalInBackground: false,
+  });
+
+  const generateMutation = useMutation({
+    mutationFn: () => generateRoadmap('gap-1'),
+    onMutate: () => {
+      setRateLimitError(null);
+      setIsGenerating(true);
+    },
+    onSuccess: () => {
+      setTimeout(() => {
+        setIsGenerating(false);
+        queryClient.invalidateQueries({ queryKey: ['learning-roadmaps'] });
+      }, 2000);
+    },
+    onError: (error: Error) => {
+      setIsGenerating(false);
+      if (error.message.includes('429') || error.message.includes('503') || error.message.includes('busy')) {
+        setRateLimitError('The AI is busy right now. Try again in a moment.');
+        setRetryAfter(30);
+      } else {
+        setRateLimitError(error.message || 'Generation failed. Please try again.');
+      }
+    },
   });
 
   const updateMutation = useMutation({
@@ -44,47 +81,100 @@ export function LearningPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-gray-900">Learning Roadmap</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-gray-900">Learning Roadmap</h1>
+        <Button
+          onClick={() => generateMutation.mutate()}
+          disabled={generateMutation.isPending || isGenerating || retryAfter > 0}
+          isLoading={generateMutation.isPending || isGenerating}
+        >
+          <Sparkles className="w-4 h-4 mr-2" />
+          {retryAfter > 0 ? `Retry in ${retryAfter}s` : 'Generate Roadmap'}
+        </Button>
+      </div>
+
+      {rateLimitError && (
+        <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-yellow-600 mt-0.5 shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-yellow-900">{rateLimitError}</p>
+            {retryAfter > 0 && (
+              <p className="text-xs text-yellow-700 mt-1">
+                You can retry in {retryAfter} second{retryAfter !== 1 ? 's' : ''}.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       {roadmaps.length === 0 ? (
         <EmptyState
           title="No learning roadmaps yet"
-          message="Generate a personalized learning roadmap based on your skill gaps."
+          message="Generate a personalized step-by-step learning plan based on your skill gaps."
+          action={
+            <Button
+              onClick={() => generateMutation.mutate()}
+              disabled={generateMutation.isPending || isGenerating || retryAfter > 0}
+              isLoading={generateMutation.isPending || isGenerating}
+            >
+              <Sparkles className="w-4 h-4 mr-2" />
+              {retryAfter > 0 ? `Retry in ${retryAfter}s` : 'Generate Learning Roadmap'}
+            </Button>
+          }
         />
       ) : (
         <div className="space-y-6">
-          {roadmaps.map((roadmap) => (
-            <Card key={roadmap.id}>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <BookOpen className="w-5 h-5 text-blue-600" />
-                  {roadmap.title}
-                </CardTitle>
-                <p className="text-sm text-gray-500 mt-1">{roadmap.description}</p>
-                <div className="flex items-center gap-2 mt-2 text-sm text-gray-600">
-                  <Clock className="w-4 h-4" />
-                  {roadmap.estimated_hours} hours estimated
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="relative">
-                  {/* Timeline line */}
-                  <div className="absolute left-4 top-0 bottom-0 w-0.5 bg-gray-200" />
-
-                  <div className="space-y-4">
-                    {roadmap.resources.map((resource) => (
-                      <ResourceItem
-                        key={resource.id}
-                        resource={resource}
-                        onToggle={handleToggle}
-                        isUpdating={updateMutation.isPending}
-                      />
-                    ))}
+          {roadmaps.map((roadmap) => {
+            const completed = roadmap.resources.filter((r) => r.completed).length;
+            const total = roadmap.resources.length;
+            const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+            return (
+              <Card key={roadmap.id}>
+                <CardHeader>
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <CardTitle className="flex items-center gap-2">
+                        <BookOpen className="w-5 h-5 text-blue-600" />
+                        {roadmap.title}
+                      </CardTitle>
+                      <p className="text-sm text-gray-500 mt-1">{roadmap.description}</p>
+                      <div className="flex items-center gap-2 mt-2 text-sm text-gray-600">
+                        <Clock className="w-4 h-4" />
+                        {roadmap.estimated_hours} hours estimated
+                      </div>
+                    </div>
+                    <div className="text-right text-sm text-gray-500">
+                      <span className="font-semibold text-gray-900">{pct}%</span> complete
+                      <div className="w-24 bg-gray-200 rounded-full h-1.5 mt-1">
+                        <div
+                          className="bg-green-500 h-1.5 rounded-full transition-all"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                </CardHeader>
+                <CardContent>
+                  <div className="relative">
+                    <div className="absolute left-4 top-0 bottom-0 w-0.5 bg-gray-200" />
+                    <div className="space-y-4">
+                      {roadmap.resources
+                        .slice()
+                        .sort((a, b) => a.order_index - b.order_index)
+                        .map((resource) => (
+                          <ResourceItem
+                            key={resource.id}
+                            resource={resource}
+                            onToggle={handleToggle}
+                            isUpdating={updateMutation.isPending}
+                          />
+                        ))}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       )}
     </div>
@@ -142,7 +232,7 @@ function ResourceItem({
               href={resource.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-blue-600 hover:text-blue-700"
+              className="text-blue-600 hover:text-blue-700 ml-2"
               aria-label="Open resource"
             >
               <ExternalLink className="w-4 h-4" />
