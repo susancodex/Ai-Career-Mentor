@@ -1,14 +1,13 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { useAuthStore } from '../store/authStore';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
 
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
   },
-  withCredentials: true,
 });
 
 let isRefreshing = false;
@@ -54,10 +53,19 @@ apiClient.interceptors.response.use(
       originalRequest._retry = true;
       isRefreshing = true;
 
+      const storedRefresh = useAuthStore.getState().refreshToken;
+      if (!storedRefresh) {
+        useAuthStore.getState().logout();
+        window.location.href = '/login';
+        return Promise.reject(error);
+      }
+
       try {
-        const response = await axios.post(`${API_BASE_URL}/auth/refresh/`, {}, { withCredentials: true });
-        const { access } = response.data as { access: string };
-        useAuthStore.getState().setAccessToken(access);
+        const response = await axios.post(`${API_BASE_URL}/auth/refresh/`, {
+          refresh: storedRefresh,
+        });
+        const { access, refresh } = response.data as { access: string; refresh?: string };
+        useAuthStore.getState().setAccessToken(access, refresh);
         onTokenRefreshed(access);
         if (originalRequest.headers) {
           originalRequest.headers.Authorization = `Bearer ${access}`;

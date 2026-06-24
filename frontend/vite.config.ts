@@ -8,9 +8,7 @@ import autoprefixer from "autoprefixer";
 const rawPort = process.env.PORT;
 
 if (!rawPort) {
-  throw new Error(
-    "PORT environment variable is required but was not provided.",
-  );
+  throw new Error("PORT environment variable is required but was not provided.");
 }
 
 const port = Number(rawPort);
@@ -22,10 +20,10 @@ if (Number.isNaN(port) || port <= 0) {
 const basePath = process.env.BASE_PATH;
 
 if (!basePath) {
-  throw new Error(
-    "BASE_PATH environment variable is required but was not provided.",
-  );
+  throw new Error("BASE_PATH environment variable is required but was not provided.");
 }
+
+const djangoPort = process.env.DJANGO_PORT || "8000";
 
 export default defineConfig({
   base: basePath,
@@ -54,7 +52,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "src"),
-      "@assets": path.resolve(import.meta.dirname, "..", "..", "attached_assets"),
+      "@assets": path.resolve(import.meta.dirname, "..", "attached_assets"),
     },
     dedupe: ["react", "react-dom"],
   },
@@ -70,6 +68,13 @@ export default defineConfig({
     allowedHosts: true,
     fs: {
       strict: false,
+    },
+    proxy: {
+      "/api": {
+        target: `http://127.0.0.1:${djangoPort}`,
+        changeOrigin: true,
+        secure: false,
+      },
     },
   },
   preview: {

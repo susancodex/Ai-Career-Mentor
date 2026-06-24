@@ -19,7 +19,7 @@ export function useAuth() {
   const loginMutation = useMutation({
     mutationFn: login,
     onSuccess: (data) => {
-      setAuth(data.user, data.tokens.access);
+      setAuth(data.user, data.tokens.access, data.tokens.refresh);
       queryClient.invalidateQueries({ queryKey: ['profile'] });
       navigate('/dashboard');
     },
@@ -28,7 +28,7 @@ export function useAuth() {
   const registerMutation = useMutation({
     mutationFn: register,
     onSuccess: (data) => {
-      setAuth(data.user, data.tokens.access);
+      setAuth(data.user, data.tokens.access, data.tokens.refresh);
       queryClient.invalidateQueries({ queryKey: ['profile'] });
       navigate('/dashboard');
     },
