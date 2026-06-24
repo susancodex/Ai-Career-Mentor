@@ -44,6 +44,7 @@ from app.core.gemini_client import (
     invoke_with_backoff,
     stream_with_backoff,
 )
+from app.core.langfuse_setup import get_langfuse_handler
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +170,10 @@ async def _classify_message(session_id: str, content: str) -> str:
 
     Uses the cheap fallback model (gemini-2.5-flash-lite) and a strict
     JSON-only prompt so this fast path consumes minimal quota.
+
+    The Langfuse handler is passed in config so the routing step is
+    traced in the same session as the subsequent streaming step —
+    agent-to-agent handoffs appear as a single linked Langfuse session.
     """
     state: ChatState = {
         "session_id": session_id,
@@ -176,7 +181,14 @@ async def _classify_message(session_id: str, content: str) -> str:
         "agent": "general",
         "response": "",
     }
-    config = {"configurable": {"thread_id": f"route-{session_id}"}}
+    callbacks = []
+    handler = get_langfuse_handler(session_id=session_id)
+    if handler:
+        callbacks.append(handler)
+    config = {
+        "configurable": {"thread_id": f"route-{session_id}"},
+        **({"callbacks": callbacks} if callbacks else {}),
+    }
     try:
         result = await _graph.ainvoke(state, config=config)
         return result.get("agent", "general")
