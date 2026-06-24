@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-test:
+    name: Django backend tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: career_mentor_test
+          POSTGRES_USER: career_mentor
+          POSTGRES_PASSWORD: testpassword
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+
+    env:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+      DATABASE_URL: postgres://career_mentor:testpassword@localhost:5432/career_mentor_test
+      REDIS_URL: redis://localhost:6379/0
+      SECRET_KEY: ci-test-secret-key
+      AI_SERVICE_SHARED_SECRET: ci-test-hmac-secret
+      AI_SERVICE_URL: http://localhost:8001
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        working-directory: backend
+        run: pip install -r requirements/dev.txt
+      - name: Run migrations
+        working-directory: backend
+        run: python manage.py migrate --noinput
+      - name: Run tests
+        working-directory: backend
+        run: pytest tests/ -v
+
+  ai-service-test:
+    name: FastAPI AI service tests
+    runs-on: ubuntu-latest
+    env:
+      GOOGLE_API_KEY: test-key-never-call-real-api
+      AI_SERVICE_SHARED_SECRET: ci-test-hmac-secret
+      DATABASE_URL: postgresql+asyncpg://career_mentor:testpassword@localhost:5432/career_mentor_test
+      LANGFUSE_PUBLIC_KEY: ""
+      LANGFUSE_SECRET_KEY: ""
+      GEMINI_RPM_LIMIT: "60"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        working-directory: ai_service
+        run: pip install -r requirements.txt
+      - name: Run tests (LLM mocked — never hits real Gemini API)
+        working-directory: ai_service
+        run: pytest tests/ -v
+
+  # Golden tests (real Gemini API) — run manually or nightly only.
+  # These WILL occasionally fail on 429 if the free-tier quota is hit.
+  # Never include in standard PR CI.
+  # golden-tests:
+  #   name: Golden tests (real Gemini)
+  #   if: github.event_name == 'schedule'
+  #   ...

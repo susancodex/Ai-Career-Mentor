@@ -1,0 +1,92 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: career_mentor
+      POSTGRES_USER: career_mentor
+      POSTGRES_PASSWORD: devpassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U career_mentor"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Self-hosted Langfuse — fully free, no trace cap.
+  # Omit this service and set LANGFUSE_HOST=https://cloud.langfuse.com
+  # if you'd prefer their managed free tier instead.
+  langfuse:
+    image: langfuse/langfuse:2
+    environment:
+      DATABASE_URL: postgres://career_mentor:devpassword@postgres:5432/langfuse
+      NEXTAUTH_SECRET: devsecret
+      NEXTAUTH_URL: http://localhost:3000
+      SALT: devsalt
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  backend:
+    build: ../backend
+    env_file: ../backend/.env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../backend:/app
+
+  celery_worker:
+    build: ../backend
+    command: celery -A config worker -l info
+    env_file: ../backend/.env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../backend:/app
+
+  ai_service:
+    build: ../ai_service
+    env_file: ../ai_service/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      langfuse:
+        condition: service_started
+    ports:
+      - "8001:8001"
+    volumes:
+      - ../ai_service:/app
+
+volumes:
+  pgdata:

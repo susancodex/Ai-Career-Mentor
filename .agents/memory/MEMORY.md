@@ -1,0 +1,1 @@
+- [Backend stack](backend-stack.md) — Django+DRF+Celery + FastAPI AI service; free-tier (Gemini, pgvector, Langfuse, Cloudinary); all stubs documented explicitly.
