@@ -11,6 +11,8 @@ class LearningRoadmap(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="roadmaps")
     skill_gap = models.ForeignKey(SkillGap, on_delete=models.CASCADE, related_name="roadmaps")
     title = models.CharField(max_length=255, blank=True)
+    description = models.TextField(blank=True)
+    estimated_hours = models.FloatField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
 

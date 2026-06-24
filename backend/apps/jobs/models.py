@@ -41,6 +41,7 @@ class JobMatch(models.Model):
     fit_score = models.FloatField(default=0.0)
     fit_explanation = models.TextField(blank=True)
     external_url = models.URLField(blank=True)
+    salary_range = models.CharField(max_length=255, blank=True)
     match_status = models.CharField(max_length=20, choices=MatchStatus.choices, default=MatchStatus.NEW)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

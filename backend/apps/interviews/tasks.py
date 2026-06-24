@@ -22,6 +22,8 @@ def generate_interview_questions(self, session_id: str):
                 question_text=q.get("question_text", ""),
                 category=q.get("category", InterviewQuestion.Category.GENERAL),
             )
+        session.status = InterviewSession.Status.READY
+        session.save(update_fields=["status"])
         logger.info("Generated %d questions for session %s", len(questions), session_id)
     except Exception as exc:
         logger.exception("Interview question generation failed for session %s", session_id)

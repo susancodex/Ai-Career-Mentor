@@ -11,8 +11,16 @@ class CareerPath(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="career_paths")
     resume = models.ForeignKey(Resume, on_delete=models.CASCADE, related_name="career_paths")
     target_role = models.CharField(max_length=255, blank=True)
-    paths = models.JSONField(default=list)
+    title = models.CharField(max_length=255, blank=True)
+    description = models.TextField(blank=True)
+    reasoning = models.TextField(blank=True)
+    match_score = models.FloatField(default=0.0)
+    required_skills = models.JSONField(default=list)
+    timeline_months = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-match_score", "-created_at"]
 
 
 class SkillGap(models.Model):
@@ -22,6 +30,7 @@ class SkillGap(models.Model):
     target_role = models.CharField(max_length=255)
     missing_skills = models.JSONField(default=list)
     existing_skills = models.JSONField(default=list)
+    skill_levels = models.JSONField(default=dict)
     analysis = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

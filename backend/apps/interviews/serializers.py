@@ -3,9 +3,15 @@ from .models import InterviewSession, InterviewQuestion
 
 
 class InterviewQuestionSerializer(serializers.ModelSerializer):
+    question = serializers.CharField(source="question_text")
+    session_id = serializers.UUIDField(source="session_id")
+
     class Meta:
         model = InterviewQuestion
-        fields = ("id", "question_text", "category", "user_answer", "ai_feedback", "score", "created_at")
+        fields = (
+            "id", "session_id", "category", "question",
+            "user_answer", "ai_feedback", "score", "created_at",
+        )
 
 
 class InterviewSessionSerializer(serializers.ModelSerializer):
@@ -13,4 +19,4 @@ class InterviewSessionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = InterviewSession
-        fields = ("id", "target_role", "questions", "created_at")
+        fields = ("id", "target_role", "status", "questions", "created_at")

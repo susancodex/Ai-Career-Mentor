@@ -1,19 +1,21 @@
 """
 Chat views.
 
-The streaming proxy view opens an SSE connection to the AI service's
-/api/v1/chat/message endpoint and relays each event to the browser,
-then persists the final assistant message once the stream closes.
+SSE event format contract (must match frontend chat.ts):
+  - token event:   data: {"token": "<chunk>"}\n\n
+  - terminal:      data: [DONE]\n\n
 
-If the Gemini rate limiter is saturated, the AI service streams back a
-typed 'rate_limited' SSE event instead of blocking — we relay it as-is.
+The AI service emits {type, content} events internally; this relay
+transforms them to the {token} / [DONE] shape the frontend expects.
 
-API contract (must match frontend prompt exactly):
-  GET  /chat/sessions/{id}/messages/  → 200 ChatMessage[]
-  POST /chat/sessions/{id}/messages/  → text/event-stream
+API contract:
+  POST /chat/sessions/                  -> 201 ChatSession
+  GET  /chat/sessions/{id}/messages/   -> 200 ChatMessage[]
+  POST /chat/sessions/{id}/messages/   -> text/event-stream
 """
 import json
 import logging
+from datetime import datetime
 
 import httpx
 from django.conf import settings
@@ -34,15 +36,13 @@ class ChatSessionCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        session = ChatSession.objects.create(user=request.user)
+        title = f"Chat {datetime.utcnow().strftime('%b %d, %H:%M')}"
+        session = ChatSession.objects.create(user=request.user, title=title)
         return Response(ChatSessionSerializer(session).data, status=status.HTTP_201_CREATED)
 
 
 class ChatMessagesDispatchView(APIView):
-    """
-    Dispatches GET → message list, POST → SSE stream.
-    Both operations on /chat/sessions/{id}/messages/ per the API contract.
-    """
+    """GET → message list, POST → SSE stream."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pk):
@@ -84,9 +84,10 @@ class ChatMessagesDispatchView(APIView):
 
     def _stream_from_ai(self, session: ChatSession, content: str):
         """
-        Opens SSE stream to the AI service and relays events to the browser.
-        Persists the assembled assistant message once the stream closes.
-        Rate-limited events are relayed as-is — never blocked.
+        Relays AI service SSE to browser using the frontend's expected format:
+          {type: "token", content: "X"}  →  data: {"token": "X"}\n\n
+          {type: "done"}                 →  data: [DONE]\n\n
+          {type: "rate_limited"|"error"} →  data: {"token": "<message>"}\n\n  then  data: [DONE]\n\n
         """
         ai_url = f"{settings.AI_SERVICE_URL}/api/v1/chat/message"
         payload = json.dumps({
@@ -97,26 +98,46 @@ class ChatMessagesDispatchView(APIView):
         headers = _headers("POST", "/api/v1/chat/message", payload)
         headers["Accept"] = "text/event-stream"
 
-        assistant_chunks = []
+        assistant_chunks: list[str] = []
 
         try:
             with httpx.Client(timeout=httpx.Timeout(120.0, connect=5.0)) as client:
                 with client.stream("POST", ai_url, content=payload, headers=headers) as resp:
                     resp.raise_for_status()
                     for line in resp.iter_lines():
-                        if line.startswith("data:"):
-                            data_str = line[5:].strip()
-                            yield f"data: {data_str}\n\n"
-                            try:
-                                data = json.loads(data_str)
-                                if data.get("type") == "token":
-                                    assistant_chunks.append(data.get("content", ""))
-                            except json.JSONDecodeError:
-                                pass
+                        if not line.startswith("data:"):
+                            continue
+                        data_str = line[5:].strip()
+                        try:
+                            data = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+
+                        event_type = data.get("type")
+                        event_content = data.get("content", "")
+
+                        if event_type == "token":
+                            assistant_chunks.append(event_content)
+                            yield f'data: {json.dumps({"token": event_content})}\n\n'
+
+                        elif event_type == "done":
+                            yield "data: [DONE]\n\n"
+                            return
+
+                        elif event_type in ("rate_limited", "error"):
+                            # Surface the message as a final token so the user sees it,
+                            # then terminate cleanly.
+                            if event_content:
+                                assistant_chunks.append(event_content)
+                                yield f'data: {json.dumps({"token": event_content})}\n\n'
+                            yield "data: [DONE]\n\n"
+                            return
 
         except httpx.HTTPError as e:
             logger.error("AI service streaming error: %s", e)
-            yield f'data: {json.dumps({"type": "error", "content": "AI service unavailable."})}\n\n'
+            msg = "AI service unavailable. Please try again."
+            yield f'data: {json.dumps({"token": msg})}\n\n'
+            yield "data: [DONE]\n\n"
         finally:
             final_content = "".join(assistant_chunks)
             if final_content:

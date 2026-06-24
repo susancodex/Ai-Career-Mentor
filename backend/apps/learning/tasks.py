@@ -24,6 +24,8 @@ def generate_roadmap(self, user_id: str, skill_gap_id: str):
             user_id=user_id,
             skill_gap=skill_gap,
             title=result.get("title", f"Roadmap for {skill_gap.target_role}"),
+            description=result.get("description", ""),
+            estimated_hours=result.get("estimated_hours"),
         )
         for i, r in enumerate(result.get("resources", [])):
             LearningResource.objects.create(

@@ -1,0 +1,96 @@
+5. Repository Structure (backend only)
+backend/
+├── config/
+│   ├── settings/{base,dev,prod}.py
+│   ├── urls.py
+│   ├── wsgi.py
+│   └── asgi.py
+├── apps/
+│   ├── users/
+│   ├── resumes/          # stores cloudinary_url/public_id, no file fields
+│   ├── careers/
+│   ├── jobs/
+│   ├── interviews/
+│   ├── learning/
+│   └── chat/
+├── core/
+│   ├── ai_client.py       # HMAC-signed calls to the AI service
+│   └── permissions.py
+├── requirements/{base,dev,prod}.txt
+├── manage.py
+├── Dockerfile
+└── entrypoint.sh
+
+ai_service/
+├── app/
+│   ├── main.py
+│   ├── api/v1/{resume,career,jobs,interview,learning,chat}.py
+│   ├── agents/
+│   │   ├── orchestrator.py
+│   │   ├── resume_agent.py
+│   │   ├── career_agent.py
+│   │   ├── job_search_agent.py
+│   │   ├── interview_agent.py
+│   │   └── learning_agent.py
+│   ├── tools/
+│   │   ├── resume_parser.py        # pypdf / python-docx, fetches bytes from Cloudinary
+│   │   ├── cloudinary_client.py
+│   │   ├── embeddings.py            # Gemini embeddings wrapper
+│   │   ├── vector_store.py          # pgvector queries
+│   │   └── rate_limiter.py          # token-bucket + backoff for Gemini calls
+│   ├── core/
+│   │   ├── gemini_client.py         # the shared LLM wrapper described in the master prompt
+│   │   ├── langfuse_setup.py
+│   │   ├── config.py
+│   │   └── security.py              # HMAC verification of Django's internal calls
+│   └── schemas/
+├── requirements.txt
+└── Dockerfile
+6. Database Schema Changes vs. the Original (paid) Spec
+Only two things change — everything else in the original schema (users, profiles, careers, jobs, interviews, learning, chat tables) is identical:
+
+resumes
+  id (uuid, pk), user_id (fk), cloudinary_url, cloudinary_public_id,
+  original_filename, file_type, status, raw_text, created_at, updated_at
+  -- (file_url/S3 key removed, replaced with the two Cloudinary fields)
+
+resume_analyses / job_listings
+  embedding (vector(768))   -- was vector(1536) for OpenAI; Gemini's
+                              -- gemini-embedding-001 is configured to
+                              -- output 768 dims to keep the index lean
+Enable the extension once per database:
+
+CREATE EXTENSION IF NOT EXISTS vector;
+And an IVFFlat (or HNSW, if your Postgres build supports it) index for fast similarity search once you have enough rows to make it worthwhile:
+
+CREATE INDEX ON job_listings USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+7. Gemini + Langfuse Wiring (the core of the free-tier swap)
+# ai_service/app/core/gemini_client.py
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langfuse.callback import CallbackHandler
+from tenacity import retry, wait_exponential_jitter, stop_after_attempt, retry_if_exception_type
+from app.tools.rate_limiter import gemini_limiter  # token-bucket, tuned under free-tier RPM
+
+langfuse_handler = CallbackHandler()  # picks up LANGFUSE_* env vars automatically
+
+def get_llm(model: str = "gemini-2.5-flash", temperature: float = 0.3) -> ChatGoogleGenerativeAI:
+    return ChatGoogleGenerativeAI(
+        model=model,
+        temperature=temperature,
+        callbacks=[langfuse_handler],
+    )
+
+@retry(
+    wait=wait_exponential_jitter(initial=1, max=30),
+    stop=stop_after_attempt(5),
+    retry=retry_if_exception_type(RateLimitedError),
+)
+async def invoke_with_backoff(llm, messages):
+    await gemini_limiter.acquire()        # proactive throttle, before we ever hit a 429
+    return await llm.ainvoke(messages)
+# ai_service/app/core/langfuse_setup.py
+# Every LangGraph graph compile call should pass config={"callbacks": [langfuse_handler]}
+# so agent-to-agent handoffs inside the orchestrator are traced as a single linked session,
+# not as disconnected calls — use Langfuse's `trace_id` tied to chat_session_id for this.
+Every agent imports get_llm() / invoke_with_backoff() from this one module — no agent constructs its own ChatGoogleGenerativeAI instance directly. That's what makes the rate limiting and tracing actually centralized instead of duplicated five times.
+

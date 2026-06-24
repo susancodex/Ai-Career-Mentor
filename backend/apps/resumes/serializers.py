@@ -25,6 +25,10 @@ class ResumeCreateSerializer(serializers.ModelSerializer):
 
 
 class ResumeAnalysisSerializer(serializers.ModelSerializer):
+    resume_id = serializers.UUIDField(source="resume_id")
+    extracted_skills = serializers.JSONField(source="skills")
+    extracted_experience = serializers.JSONField(source="experience")
+
     class Meta:
         model = ResumeAnalysis
-        fields = ("id", "skills", "experience", "education", "summary", "created_at")
+        fields = ("id", "resume_id", "extracted_skills", "extracted_experience", "summary", "created_at")
