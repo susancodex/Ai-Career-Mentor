@@ -1,0 +1,64 @@
+2. Free-Tier Swap Reference
+Concern	Original (paid)	This build (free)
+Chat/completions LLM	Claude API	Gemini API (gemini-2.5-flash)
+Embeddings	OpenAI text-embedding-3-*	Gemini gemini-embedding-001 (768-dim)
+Agent tracing/observability	LangSmith	Langfuse (self-hosted, free + unlimited)
+Vector search	Pinecone	pgvector extension on the existing Postgres
+File storage	AWS S3	Cloudinary free tier (direct browser upload)
+3. Updated Architecture
+        Browser ──HTTPS──▶ Nginx ──▶ Django + DRF (auth, persistence, REST API)
+                                          │
+                                          │ HMAC-signed internal call
+                                          ▼
+                              FastAPI AI service (internal-only, no public route)
+                                          │
+                       ┌──────────────────┼───────────────────┐
+                       ▼                  ▼                   ▼
+                 Gemini API         Langfuse (self-hosted   Postgres + pgvector
+                 (LangChain/        Docker container,        (resume/job embeddings,
+                 LangGraph agents)  traces every call)        agent checkpoints)
+
+   Browser ──(direct, unsigned upload)──▶ Cloudinary (resume file storage)
+   Browser ◀──(secure_url, public_id)──── Cloudinary
+   Browser ──POST {cloudinary_url, public_id}──▶ Django  (metadata only, no file bytes)
+The AI service still has no public route and is only reachable from Django on the internal Docker/VPC network — that part of the original design doesn't change with the free-tier swap.
+
+4. API Contract (identical to the frontend prompt — keep both in sync)
+Base URL: /api/v1. JWT bearer auth on all but /auth/*. Error shape:
+
+{ "error": { "code": "string", "message": "human readable", "details": {} } }
+POST   /auth/register/                 { email, password, full_name } -> 201 { user, tokens }
+POST   /auth/login/                    { email, password } -> 200 { user, tokens }
+POST   /auth/refresh/                  (refresh cookie) -> 200 { access }
+POST   /auth/logout/                   -> 204
+
+GET    /me/                            -> 200 Profile
+PATCH  /me/                            { current_role?, years_experience?, target_roles?, location?, bio? } -> 200 Profile
+
+POST   /resumes/                       { cloudinary_url, cloudinary_public_id, original_filename } -> 201 Resume
+GET    /resumes/                       -> 200 Resume[]
+GET    /resumes/{id}/                  -> 200 Resume   # status: uploaded|parsing|parsed|failed
+GET    /resumes/{id}/analysis/         -> 200 ResumeAnalysis | 404 if not parsed yet
+
+POST   /careers/paths/generate/        { resume_id, target_role? } -> 202 { job_id }
+GET    /careers/paths/                 -> 200 CareerPath[]
+GET    /careers/skill-gaps/{resume_id}/?target_role=... -> 200 SkillGap
+
+POST   /jobs/matches/generate/         { resume_id } -> 202 { job_id }
+GET    /jobs/matches/                  -> 200 JobMatch[]
+PATCH  /jobs/matches/{id}/             { status: "saved"|"applied"|"dismissed" } -> 200 JobMatch
+
+POST   /interviews/sessions/           { target_role } -> 201 InterviewSession
+POST   /interviews/sessions/{id}/questions/generate/ -> 202 { job_id }
+GET    /interviews/sessions/{id}/      -> 200 InterviewSession (with questions[])
+POST   /interviews/questions/{id}/answer/ { user_answer } -> 200 { ai_feedback, score }
+
+POST   /learning/roadmaps/generate/    { skill_gap_id } -> 202 { job_id }
+GET    /learning/roadmaps/             -> 200 LearningRoadmap[]
+PATCH  /learning/resources/{id}/       { completed: true } -> 200 LearningResource
+
+POST   /chat/sessions/                 -> 201 ChatSession
+GET    /chat/sessions/{id}/messages/   -> 200 ChatMessage[]
+POST   /chat/sessions/{id}/messages/   { content } -> text/event-stream
+
+GET    /jobs/async-status/{job_id}/    -> 200 { status: "pending"|"done"|"failed", result? }

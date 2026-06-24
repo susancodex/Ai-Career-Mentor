@@ -14,18 +14,25 @@ description: AI Career Mentor backend architecture decisions, free-tier constrai
 
 ## Critical rules
 - Never enable billing on the GOOGLE_API_KEY project — removes free tier
-- All LLM calls must go through get_llm() / invoke_with_backoff() in gemini_client.py
+- All LLM calls must go through get_llm() / invoke_with_backoff() / stream_with_backoff() in gemini_client.py
 - Tests must never hit real Gemini API — mock at the gemini_client boundary
 - HMAC signatures must be verified with timestamp check (60s window) on AI service
 
+## Test configuration
+- Django tests: pytest.ini → config.settings.test (SQLite in-memory)
+  - Why SQLite: no Postgres in Replit; all Django model fields are standard types
+  - embedding column is a JSONField (not native pgvector) — SQLite handles it fine
+- AI service tests: pool patched to None → empty-default branches cover no-DB case
+- CI (ci.yml): both jobs also use SQLite/no-DB; no service containers needed
+
 ## Explicit stubs (open tasks)
-- ai_service/app/api/v1/career.py: resume skills/summary DB lookup by resume_id
-- ai_service/app/api/v1/jobs.py: resume embedding DB lookup by resume_id
-- ai_service/app/api/v1/chat.py: conversation history DB lookup by session_id
-- ai_service/app/agents/orchestrator.py: PostgresSaver (using MemorySaver now — loses state on restart)
-- ai_service/app/agents/orchestrator.py: real token streaming via llm.astream() (word-split simulation now)
+- ai_service/app/agents/orchestrator.py: AsyncPostgresSaver (using MemorySaver now)
+  — not critical: multi-turn context is preserved via DB-backed history from get_chat_history()
+- ai_service/app/agents/orchestrator.py: specialist nodes all route to _stub_agent_node
+  — for richer chaining, wire each agent as its own node
 - Job seeding: fixture data only — real job-board API integration pending
 
-**Why stubs exist:** The AI service routes need resume/embedding/history data from the Django DB. 
-The proper pattern is an internal DB read (shared Postgres) or a secondary HMAC-signed call back. 
-Chosen not to implement to avoid circular dependency complexity before the DB layer is wired.
+**Why stubs exist:** PostgresSaver requires langgraph-checkpoint-postgres + psycopg[async];
+DB-backed chat history (get_chat_history) already ensures multi-turn context survives restarts,
+so MemorySaver is non-critical. Specialist node wiring deferred to avoid complexity before
+the routing layer is verified stable.

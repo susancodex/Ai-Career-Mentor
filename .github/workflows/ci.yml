@@ -10,28 +10,19 @@ jobs:
   backend-test:
     name: Django backend tests
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_DB: career_mentor_test
-          POSTGRES_USER: career_mentor
-          POSTGRES_PASSWORD: testpassword
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
-      redis:
-        image: redis:7-alpine
-        ports: ["6379:6379"]
+    # No Postgres or Redis service needed — pytest.ini points at
+    # config.settings.test which uses SQLite in-memory. Django model fields
+    # are all standard types (embedding is a JSONField, not pgvector), so
+    # SQLite exercises every Django code path. pgvector search is tested
+    # solely in the ai-service-test job.
 
     env:
-      DJANGO_SETTINGS_MODULE: config.settings.dev
-      DATABASE_URL: postgres://career_mentor:testpassword@localhost:5432/career_mentor_test
-      REDIS_URL: redis://localhost:6379/0
-      SECRET_KEY: ci-test-secret-key
+      # pytest.ini sets DJANGO_SETTINGS_MODULE=config.settings.test,
+      # which overrides the env var. Set it here anyway so manage.py calls
+      # (e.g. collectstatic) also use the test settings if needed.
+      DJANGO_SETTINGS_MODULE: config.settings.test
+      # Must be ≥ 32 bytes to silence SimpleJWT's InsecureKeyLengthWarning
+      SECRET_KEY: ci-test-secret-key-padded-to-32-bytes!!
       AI_SERVICE_SHARED_SECRET: ci-test-hmac-secret
       AI_SERVICE_URL: http://localhost:8001
 
@@ -43,9 +34,6 @@ jobs:
       - name: Install dependencies
         working-directory: backend
         run: pip install -r requirements/dev.txt
-      - name: Run migrations
-        working-directory: backend
-        run: python manage.py migrate --noinput
       - name: Run tests
         working-directory: backend
         run: pytest tests/ -v
@@ -53,6 +41,8 @@ jobs:
   ai-service-test:
     name: FastAPI AI service tests
     runs-on: ubuntu-latest
+    # No Postgres needed for the AI service tests either — DB calls in
+    # core/db.py are mocked (pool patched to None → empty-default branch).
     env:
       GOOGLE_API_KEY: test-key-never-call-real-api
       AI_SERVICE_SHARED_SECRET: ci-test-hmac-secret
@@ -73,10 +63,20 @@ jobs:
         working-directory: ai_service
         run: pytest tests/ -v
 
-  # Golden tests (real Gemini API) — run manually or nightly only.
-  # These WILL occasionally fail on 429 if the free-tier quota is hit.
-  # Never include in standard PR CI.
+  # ---------------------------------------------------------------------------
+  # Golden tests — real Gemini API, run on schedule or manual dispatch only.
+  # NEVER run in standard PR CI: will consume free-tier quota and may 429.
+  # ---------------------------------------------------------------------------
   # golden-tests:
   #   name: Golden tests (real Gemini)
-  #   if: github.event_name == 'schedule'
-  #   ...
+  #   runs-on: ubuntu-latest
+  #   if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+  #   env:
+  #     GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY_GOLDEN }}
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-python@v5
+  #       with: { python-version: "3.12" }
+  #     - run: pip install -r ai_service/requirements.txt
+  #     - run: pytest ai_service/tests/golden/ -v
+  #       working-directory: ai_service
