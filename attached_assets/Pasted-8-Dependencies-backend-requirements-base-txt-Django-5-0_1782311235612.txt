@@ -1,0 +1,158 @@
+8. Dependencies
+backend/requirements/base.txt
+Django==5.0.6
+djangorestframework==3.15.1
+djangorestframework-simplejwt==5.3.1
+django-cors-headers==4.3.1
+django-environ==0.11.2
+psycopg2-binary==2.9.9
+celery==5.4.0
+redis==5.0.4
+drf-spectacular==0.27.2
+gunicorn==22.0.0
+whitenoise==6.6.0
+sentry-sdk==2.3.1
+httpx==0.27.0
+(boto3 / django-storages removed — no S3. Nothing replaces them; Cloudinary metadata is just plain fields on the Resume model.)
+
+ai_service/requirements.txt
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+langchain==0.2.1
+langgraph==0.0.55
+langchain-google-genai==1.0.6
+google-generativeai==0.5.4
+langfuse==2.36.0
+pydantic==2.7.1
+pydantic-settings==2.2.1
+python-multipart==0.0.9
+pypdf==4.2.0
+python-docx==1.1.2
+sqlalchemy[asyncio]==2.0.30
+asyncpg==0.29.0
+pgvector==0.2.5
+cloudinary==1.40.0
+redis==5.0.4
+httpx==0.27.0
+tenacity==8.3.0
+sentry-sdk[fastapi]==2.3.1
+pytest==8.2.0
+pytest-asyncio==0.23.7
+(langchain-anthropic removed; langchain-google-genai + google-generativeai added; langfuse added; cloudinary added in place of any S3 SDK.)
+
+9. Environment Variables
+backend/.env.example
+DJANGO_SETTINGS_MODULE=config.settings.prod
+SECRET_KEY=
+DEBUG=False
+ALLOWED_HOSTS=api.yourdomain.com
+DATABASE_URL=postgres://user:pass@postgres:5432/career_mentor
+REDIS_URL=redis://redis:6379/0
+CORS_ALLOWED_ORIGINS=https://yourdomain.com
+AI_SERVICE_URL=http://ai_service:8001
+AI_SERVICE_SHARED_SECRET=
+SENTRY_DSN=
+JWT_ACCESS_TOKEN_LIFETIME_MIN=15
+JWT_REFRESH_TOKEN_LIFETIME_DAYS=7
+ai_service/.env.example
+GOOGLE_API_KEY=                          # from Google AI Studio, free, no card required
+GEMINI_DEFAULT_MODEL=gemini-2.5-flash
+GEMINI_FALLBACK_MODEL=gemini-2.5-flash-lite
+DATABASE_URL=postgresql+asyncpg://user:pass@postgres:5432/career_mentor
+REDIS_URL=redis://redis:6379/1
+AI_SERVICE_SHARED_SECRET=
+
+LANGFUSE_PUBLIC_KEY=
+LANGFUSE_SECRET_KEY=
+LANGFUSE_HOST=http://langfuse:3000        # self-hosted; use https://cloud.langfuse.com for managed free tier instead
+
+CLOUDINARY_CLOUD_NAME=
+CLOUDINARY_API_KEY=
+CLOUDINARY_API_SECRET=                    # needed server-side to fetch private/raw resources reliably
+
+SENTRY_DSN=
+LOG_LEVEL=INFO
+Get GOOGLE_API_KEY from Google AI Studio — keep this project's billing disabled to stay on the free tier. Create a second Google Cloud project (separate key) if you later need a paid tier for production; don't enable billing on your free dev project.
+
+10. Docker & Compose (backend services only)
+# infra/docker-compose.yml — backend-only local dev
+version: "3.9"
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: career_mentor
+      POSTGRES_USER: career_mentor
+      POSTGRES_PASSWORD: devpassword
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U career_mentor"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
+  # Self-hosted Langfuse — fully free, no trace cap. Omit this service and point
+  # LANGFUSE_HOST at https://cloud.langfuse.com if you'd rather use their managed free tier.
+  langfuse:
+    image: langfuse/langfuse:2
+    environment:
+      DATABASE_URL: postgres://career_mentor:devpassword@postgres:5432/langfuse
+      NEXTAUTH_SECRET: devsecret
+      NEXTAUTH_URL: http://localhost:3000
+      SALT: devsalt
+    ports: ["3000:3000"]
+    depends_on: [postgres]
+
+  backend:
+    build: ../backend
+    env_file: ../backend/.env
+    depends_on: [postgres, redis]
+    ports: ["8000:8000"]
+    volumes: ["../backend:/app"]
+
+  celery_worker:
+    build: ../backend
+    command: celery -A config worker -l info
+    env_file: ../backend/.env
+    depends_on: [postgres, redis]
+
+  ai_service:
+    build: ../ai_service
+    env_file: ../ai_service/.env
+    depends_on: [postgres, redis, langfuse]
+    ports: ["8001:8001"]
+    volumes: ["../ai_service:/app"]
+
+volumes:
+  pgdata:
+For production, drop the bind-mounted volumes, use pinned image tags, and keep ai_service off any publicly published port — identical reasoning to the original spec.
+
+backend/Dockerfile
+FROM python:3.12-slim
+WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+RUN apt-get update && apt-get install -y --no-install-recommends libpq-dev gcc curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY requirements/prod.txt .
+RUN pip install --no-cache-dir -r prod.txt
+COPY . .
+RUN chmod +x entrypoint.sh
+EXPOSE 8000
+ENTRYPOINT ["./entrypoint.sh"]
+CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3"]
+ai_service/Dockerfile
+FROM python:3.12-slim
+WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+RUN apt-get update && apt-get install -y --no-install-recommends gcc curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+EXPOSE 8001
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "2"]
