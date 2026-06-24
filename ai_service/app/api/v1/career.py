@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.core.security import verify_internal_signature
+from app.core.db import get_resume_analysis
 from app.agents.career_agent import run_skill_gap_agent, run_career_path_agent
 from app.schemas.career import (
     SkillGapRequest, SkillGapResult,
@@ -18,11 +19,9 @@ router = APIRouter(prefix="/career", tags=["career"])
 async def skill_gaps(request: Request, body: SkillGapRequest):
     """Analyse skill gaps between resume and target role."""
     try:
-        # STUB: resume_skills are fetched here by resume_id in production.
-        # For now the caller must pass skills via the resume analysis result.
-        # This is an open task: look up ResumeAnalysis by resume_id from DB.
+        analysis = await get_resume_analysis(body.resume_id)
         result = await run_skill_gap_agent(
-            resume_skills=[],  # STUB — wire up DB lookup
+            resume_skills=analysis["skills"],
             target_role=body.target_role,
             session_id=body.resume_id,
         )
@@ -41,9 +40,10 @@ async def skill_gaps(request: Request, body: SkillGapRequest):
 async def career_paths(request: Request, body: CareerPathRequest):
     """Generate ranked career paths toward a target role."""
     try:
+        analysis = await get_resume_analysis(body.resume_id)
         result = await run_career_path_agent(
-            resume_summary="",  # STUB — wire up DB lookup for resume summary
-            skills=[],           # STUB — wire up DB lookup for resume skills
+            resume_summary=analysis["summary"],
+            skills=analysis["skills"],
             target_role=body.target_role,
             session_id=body.resume_id,
         )

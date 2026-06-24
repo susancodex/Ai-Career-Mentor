@@ -1,8 +1,8 @@
 """
 Shared Gemini LLM wrapper.
 
-ALL agents must import get_llm() and invoke_with_backoff() from here.
-No agent constructs its own ChatGoogleGenerativeAI instance directly.
+ALL agents must import get_llm() / invoke_with_backoff() / stream_with_backoff()
+from here. No agent constructs its own ChatGoogleGenerativeAI instance directly.
 
 This centralises:
   - Rate limiting (proactive token-bucket, below free-tier RPM)
@@ -17,7 +17,7 @@ Free-tier design notes:
     the free tier rather than just adding overage charges.
 """
 import logging
-from typing import Optional
+from typing import AsyncGenerator, Optional
 
 from tenacity import (
     retry,
@@ -101,4 +101,35 @@ async def invoke_with_backoff(llm, messages: list) -> str:
             logger.warning("Gemini rate limit hit: %s", exc)
             raise
         logger.error("Gemini invocation error: %s", exc)
+        raise
+
+
+async def stream_with_backoff(
+    llm,
+    messages: list,
+) -> AsyncGenerator[str, None]:
+    """
+    Stream tokens from the LLM with proactive rate limiting.
+
+    Acquires a token-bucket token before opening the stream so the proactive
+    limiter fires before we touch the API — same contract as invoke_with_backoff.
+
+    Yields individual text chunks as they arrive from the model.
+    Raises RateLimitedError on quota errors (caller must handle and emit SSE).
+    Raises the original exception on other failures (caller emits SSE error).
+
+    Usage:
+        async for chunk in stream_with_backoff(llm, messages):
+            yield f'data: {json.dumps({"type": "token", "content": chunk})}\n\n'
+    """
+    await gemini_limiter.acquire()
+    try:
+        async for chunk in llm.astream(messages):
+            if chunk.content:
+                yield chunk.content
+    except Exception as exc:
+        if _is_rate_limit_error(exc):
+            logger.warning("Gemini rate limit hit during streaming: %s", exc)
+            raise RateLimitedError(str(exc)) from exc
+        logger.error("Gemini streaming error: %s", exc)
         raise

@@ -56,7 +56,16 @@ async def health():
 @app.on_event("startup")
 async def startup():
     logger.info("AI service starting up. Default model: %s", settings.GEMINI_DEFAULT_MODEL)
+    from app.core.db import init_pool
+    await init_pool()
     if settings.SENTRY_DSN:
         import sentry_sdk
         from sentry_sdk.integrations.fastapi import FastApiIntegration
         sentry_sdk.init(dsn=settings.SENTRY_DSN, integrations=[FastApiIntegration()])
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    from app.core.db import close_pool
+    await close_pool()
+    logger.info("AI service shut down cleanly.")

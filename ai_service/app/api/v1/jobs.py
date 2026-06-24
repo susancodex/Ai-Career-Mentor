@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.core.security import verify_internal_signature
+from app.core.db import get_resume_analysis
 from app.agents.job_search_agent import run_job_search_agent
 from app.schemas.jobs import JobMatchRequest, JobMatchesResult
 
@@ -15,16 +16,20 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 async def job_matches(request: Request, body: JobMatchRequest):
     """
     Find job matches using pgvector similarity + Gemini fit scoring.
-    STUB: resume embedding looked up by resume_id from DB; wired here as placeholder.
+
+    Fetches the resume embedding, summary, and skills from DB.
+    Returns an empty match list if the analysis is not yet complete
+    (e.g. resume still being processed) rather than raising an error —
+    the caller should poll resume status before triggering job matching.
     """
     try:
-        # STUB: look up resume embedding from DB by body.resume_id
-        resume_embedding = []  # open task: DB lookup
-        resume_summary = ""    # open task: DB lookup
-        resume_skills = []     # open task: DB lookup
+        analysis = await get_resume_analysis(body.resume_id)
+        resume_embedding = analysis["embedding"]
+        resume_summary = analysis["summary"]
+        resume_skills = analysis["skills"]
 
         if not resume_embedding:
-            # No embedding available yet — return empty matches rather than error
+            # Analysis not complete yet — empty response, not an error.
             return JobMatchesResult(matches=[])
 
         result = await run_job_search_agent(

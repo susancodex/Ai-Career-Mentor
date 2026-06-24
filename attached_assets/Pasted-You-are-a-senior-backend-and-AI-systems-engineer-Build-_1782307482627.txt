@@ -1,0 +1,154 @@
+You are a senior backend and AI systems engineer. Build the backend for "AI Career Mentor"
+— two services (Django + DRF, and FastAPI) that together provide resume analysis, skill-gap
+detection, career path recommendations, job matching, interview question generation, a
+learning roadmap, and a multi-agent AI chat coach.
+
+## Scope
+Backend ONLY (Django + DRF API service, and the FastAPI AI service it calls internally).
+The frontend is a separate React app built against the API Contract in Section 4 — match
+it exactly: same endpoints, same request/response shapes, same status codes, same SSE
+format for chat. Do not require the frontend to change to match implementation details.
+
+## Free-tier stack — this is the whole point of this build
+- **LLM: Google Gemini API** (`gemini-2.5-flash` as the default model, `gemini-2.5-flash-
+  lite` as a higher-throughput fallback for cheap/simple calls) via `langchain-google-genai`.
+  No Claude, no OpenAI, anywhere in this codebase.
+- **Embeddings: Gemini embeddings** (`models/gemini-embedding-001`, output dimensionality
+  set to 768) for resume/job-description vectors — not OpenAI's `text-embedding-*`.
+- **Observability: Langfuse**, self-hosted via Docker (see Section 9) so it's fully free
+  with no usage cap, instead of LangSmith. Wire it in as a callback handler on every
+  LangChain/LangGraph run so every agent call is traced (latency, tokens, prompt/response).
+- **Vector search: pgvector** extension on the same Postgres instance — not Pinecone. No
+  second database to run or pay for.
+- **File storage: Cloudinary free tier**, not S3. Resumes are uploaded directly from the
+  browser to Cloudinary (frontend's job); this backend only stores the resulting
+  `cloudinary_url` / `public_id` and fetches the raw bytes from that URL server-side when
+  it needs to extract text.
+
+## Free-tier limits you MUST design around (this is not optional)
+Gemini's free tier enforces requests-per-minute, requests-per-day, and tokens-per-minute
+caps that are tight enough to hit in normal use (low double-digit RPM on Flash, roughly
+ten-to-low-hundreds of RPD depending on model — assume it's small and changes over time;
+don't hardcode behavior around a specific number you read once). Design implications:
+- **Never call the LLM synchronously from a request/response cycle that the user is
+  blocking on for non-chat features.** Resume analysis, skill gaps, job matching, interview
+  question generation, and roadmap generation are all Celery tasks that call the AI service
+  asynchronously; the API returns 202 + a job id immediately (matches Section 4's contract).
+- **Rate-limit and retry centrally.** Build one `GeminiClient` wrapper in the AI service
+  that all agents use — it must implement exponential backoff with jitter on 429s, a
+  client-side token-bucket limiter tuned just under the documented free-tier RPM so you
+  proactively avoid 429s instead of just reacting to them, and a hard ceiling on retries
+  that surfaces a typed `RateLimitedError` rather than hanging.
+- **The chat endpoint is the one place a user waits live.** Even there, if the limiter is
+  saturated, stream back a clear "the AI is at capacity, please retry shortly" SSE event
+  rather than blocking indefinitely.
+- **One Google Cloud project, two API keys (dev/prod), never enable billing on the dev
+  project** — enabling billing on a Gemini API project removes its free tier entirely
+  rather than just adding overage charges. Keep a free, billing-disabled project for
+  development/CI and a separate one for production if you expect to ever need paid headroom.
+
+## Non-negotiable standards
+- Both services: structured config via environment variables (no hardcoded secrets),
+  structured JSON logging, automated tests with the LLM mocked, a Dockerfile, and an
+  OpenAPI schema (drf-spectacular for Django, FastAPI's built-in for the AI service).
+- Every agent's LLM output is validated against a Pydantic schema; on a schema mismatch,
+  retry once with a "fix your output to match this schema" repair prompt, then fail with a
+  typed error rather than returning malformed data to the database.
+- Treat resume text as untrusted input in every agent prompt — system prompts must
+  instruct the model explicitly to treat resume/job content as data, not instructions
+  (basic prompt-injection hygiene), since users control what's inside a resume.
+
+## Engineering discipline — read this before writing any code
+This is not a one-shot generation task. Follow these rules for every step below:
+- **Work one unit at a time** — one model, one endpoint, one agent — not "the resume
+  pipeline" or "all five agents" in a single pass. After each unit, stop and summarize:
+  what you built, why you chose this approach over alternatives, and what the developer
+  should manually verify before moving on.
+- **Explain non-trivial logic before you write it.** The HMAC signing/verification scheme,
+  the `GeminiClient` rate limiter, and the LangGraph orchestrator's routing logic each need
+  a 3-5 sentence plan stated first — don't generate first and explain after, if at all.
+- **Never let a stub look finished.** A hardcoded happy path, a skipped edge case, or a
+  "handle this properly later" must be called out explicitly in your summary and in a code
+  comment — don't bury it in a large diff.
+- **STOP and wait for the developer's explicit go-ahead** at every point marked `STOP`
+  below. These are the foundations everything else is built on, or places where a subtly
+  wrong implementation (a missing signature check, a rate limiter that doesn't actually
+  throttle) is easy to miss and expensive to discover later.
+- **Write tests alongside each unit, not after, and say plainly what they verify** — a test
+  that mocks the LLM and asserts the mock was called proves the plumbing works, not that
+  the agent's prompt produces good output; don't conflate the two.
+- **Don't optimize for looking complete.** A smaller piece the developer actually
+  understands is worth more than a larger piece they had to trust blindly.
+
+## Build in this order
+1. Scaffold both services + Postgres (with `pgvector` extension enabled) + Redis under
+   `docker-compose up`, health checks green, before writing real features.
+2. Django: user auth (JWT via SimpleJWT — register/login/refresh/logout), Profile model.
+
+   **STOP — review with the developer before continuing.** Walk through token issuance,
+   refresh, and logout together. This is the part of the system a mistake in is both easy
+   to miss and the most damaging to get wrong.
+3. Django: Resume model + `/resumes/` endpoint that accepts a `cloudinary_url` +
+   `public_id` (NOT a file upload — the frontend uploads to Cloudinary directly) and
+   enqueues a Celery task.
+4. Celery task: fetch raw bytes from the Cloudinary `secure_url`, extract text
+   (pypdf/python-docx based on extension), call the AI service's `/resume/analyze`
+   endpoint (signed with the internal HMAC secret), persist the structured result.
+
+   **STOP — review with the developer before continuing.** Confirm together, by actually
+   reading the code (not just running it), that the HMAC signature is verified on the
+   receiving end with a timestamp check (replay protection), and that a forged or stale
+   signature is rejected — don't take "it returned 200 in my one test" as sufficient proof.
+5. AI service: build the shared `GeminiClient` wrapper (Section above) and the Langfuse
+   callback integration first — every agent built after this point uses both from day one,
+   not bolted on later.
+
+   **STOP — review with the developer before continuing.** Every agent in steps 6-10
+   depends on this being correct. Confirm the rate limiter actually throttles under a
+   simulated burst (write and run a test that proves this, don't just read the code and
+   assume it works) before building anything on top of it.
+6. AI service: Resume Agent — raw text in, structured JSON (skills/experience/education)
+   + a 768-dim embedding out, validated against a strict Pydantic schema.
+7. AI service: Career Agent — skill gaps vs. a target role + ranked career path
+   recommendations with reasoning.
+8. AI service: Learning Agent — skill gaps in, a sequenced roadmap (resources, est. hours,
+   order) out.
+9. AI service: Job Search Agent — pgvector cosine-similarity search of `job_listings`
+   against the resume embedding, fit score + explanation per match. Seed `job_listings`
+   with a small sample/fixture dataset if no live job-board API is wired up yet.
+10. AI service: Interview Agent — question generation by role + category, and answer
+    scoring/feedback.
+11. AI service: Orchestrator — a LangGraph supervisor graph that routes free-text chat
+    messages to the right agent(s), checkpointed per `chat_session_id` (Postgres
+    checkpointer) so multi-turn context persists; stream tokens back over SSE.
+
+    **STOP — review with the developer before continuing.** This is the most complex piece
+    of control flow in the system. Have the agent explain the routing logic and the
+    checkpointing scheme out loud, in plain language, before you accept it — if it can't be
+    explained simply, that's a sign to simplify it, not just document it more.
+12. Django: chat session/message persistence + a streaming proxy view that opens the
+    connection to the AI service's `/chat/message` SSE endpoint and relays it to the
+    frontend, persisting the final assistant message once the stream closes.
+13. Tests: pytest for Django (mock `core.ai_client`), pytest-asyncio for FastAPI (mock the
+    Gemini client at the LangChain adapter boundary — never hit the real API in the normal
+    test suite; keep a small separately-run "golden" suite that does, for nightly CI only).
+14. CI/CD per Section 10. Production deployment per the original project's deployment
+    guide, adjusted: no S3/RDS-specific IAM needed for storage (Cloudinary is external
+    SaaS), but Postgres still needs the `pgvector` extension available wherever it's hosted.
+
+## Definition of done
+`docker-compose up` brings up Django, the FastAPI AI service, Postgres (with pgvector),
+Redis, a Celery worker, and a self-hosted Langfuse instance, all healthy. A resume
+record created with a real Cloudinary URL gets asynchronously parsed end-to-end through
+the Resume Agent. Every one of the 5 agents is independently callable and independently
+testable, and the chat orchestrator can route and chain between them. Every Gemini call
+is visible as a trace in Langfuse with prompt, response, latency, and token count. The
+service behaves correctly (clear error, no crash, no silent hang) when the Gemini free-tier
+rate limit is hit. Just as important: the developer stopped at every `STOP` checkpoint
+above, read the auth, HMAC-signing, rate-limiter, and orchestrator code, and can explain
+each of them — not merely observed that tests pass.
+
+Stop at every `STOP` checkpoint and wait for explicit confirmation before continuing.
+Outside of those checkpoints, ask only if something here genuinely contradicts itself —
+otherwise make the standard, production-grade choice and leave a one-line comment
+explaining it.
