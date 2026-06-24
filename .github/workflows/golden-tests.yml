@@ -1,0 +1,48 @@
+name: Golden Tests (real Gemini API)
+
+# NEVER runs in standard PR CI — only on schedule or manual dispatch.
+# This suite hits the real free-tier Gemini API to catch model-response
+# regressions that mocks can't detect.  A separate GOOGLE_API_KEY_GOLDEN
+# secret keeps golden quota separate from dev usage.
+#
+# Free-tier rate limit: 10 RPM / 500 RPD for gemini-2.5-flash.
+# The suite must stay well under that — each test file gets a sleep buffer.
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you running golden tests?"
+        required: false
+        default: "manual verification"
+  schedule:
+    # 02:00 UTC every night — low-traffic window, avoids morning quota contention
+    - cron: "0 2 * * *"
+
+jobs:
+  golden-ai-service:
+    name: Golden tests — real Gemini API
+    runs-on: ubuntu-latest
+
+    env:
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY_GOLDEN }}
+      AI_SERVICE_SHARED_SECRET: golden-test-hmac-secret
+      DATABASE_URL: postgresql+asyncpg://career_mentor:testpassword@localhost:5432/career_mentor_test
+      LANGFUSE_PUBLIC_KEY: ""
+      LANGFUSE_SECRET_KEY: ""
+      GEMINI_RPM_LIMIT: "6"  # conservative — stay well under free-tier 10 RPM
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        working-directory: ai_service
+        run: pip install -r requirements.txt
+
+      - name: Run golden tests (hits real Gemini API — charges free-tier quota)
+        working-directory: ai_service
+        run: pytest tests/golden/ -v --timeout=120

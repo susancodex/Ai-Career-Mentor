@@ -1,0 +1,17 @@
+11. CI/CD
+Same shape as the original spec's ci.yml (lint, type-check, test, build) — the only change is in what gets mocked: tests must never call the real Gemini API or the real Langfuse instance. Mock get_llm()/invoke_with_backoff() at the boundary in gemini_client.py, and stub the Langfuse callback handler in test config. Keep a separate, manually-triggered or nightly golden-tests.yml workflow that does hit the real free-tier Gemini API with a handful of fixed prompts, specifically to catch silent schema drift in real model output — and budget for the fact that this workflow will occasionally fail on a 429 if it runs at a bad time, by design.
+
+12. Security Checklist (backend-specific additions for this stack)
+GOOGLE_API_KEY and AI_SERVICE_SHARED_SECRET only in env/secrets, never logged (scrub them in any request/response logging middleware)
+AI service unreachable from the public internet (network-level, not just app-level)
+HMAC + timestamp on every Django → AI-service call, rejected if older than ~60s (replay protection)
+Cloudinary CLOUDINARY_API_SECRET lives only on the backend/AI service — the frontend only ever gets the cloud name + an unsigned upload preset, never the secret
+Resume/job content explicitly framed as untrusted data in every system prompt (prompt-injection hygiene)
+Centralized Gemini rate limiter prevents any single agent from starving the others of free-tier quota
+Langfuse instance (if self-hosted) is on the internal network only, with its own auth — don't expose the dashboard publicly without a login wall
+13. Testing Strategy
+Django: pytest-django + factory-boy, core.ai_client mocked in unit tests; a small set of integration tests against a real (test-mode) AI service container in CI.
+FastAPI: pytest-asyncio + httpx.AsyncClient; get_llm() and invoke_with_backoff() mocked for the normal suite; recorded-fixture or nightly "golden" tests for real-model behavior, run separately so free-tier rate limits don't make normal CI flaky.
+Rate limiter: dedicated unit tests for rate_limiter.py — verify it queues/backs off correctly under simulated burst load rather than just trusting it works.
+14. Definition of Done
+docker-compose up brings up Django, the AI service, Postgres+pgvector, Redis, a Celery worker, and (optionally) self-hosted Langfuse, all healthy. A Resume created with a real Cloudinary URL gets parsed end-to-end through the Resume Agent and the result is visible both in the database and as a trace in Langfuse. All 5 agents are independently callable via their FastAPI endpoints and chainable through the chat orchestrator. The system degrades gracefully (typed error, clear message, no crash) when Gemini's free-tier rate limit is hit, and CI passes without ever calling the real Gemini API in the normal suite. Equally required: the developer stopped at each STOP checkpoint in Section 1, read the auth, HMAC-signing, rate-limiter, and orchestrator code, and can explain how each works — not just observed a green CI run.
