@@ -11,6 +11,43 @@ env = { "CI" = "true" }
 [workflows]
 runButton = "Project"
 
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Django Backend"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start application"
+
+[[workflows.workflow]]
+name = "Django Backend"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd backend && DJANGO_SETTINGS_MODULE=config.settings.base python manage.py runserver 0.0.0.0:8000"
+waitForPort = 8000
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Start application"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd frontend && pnpm run dev"
+waitForPort = 5173
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
 [agent]
 stack = "PNPM_WORKSPACE"
 expertMode = true
@@ -22,3 +59,16 @@ timeoutMs = 20000
 [nix]
 channel = "stable-25_05"
 packages = ["libxcrypt", "postgresql"]
+
+[userenv]
+
+[userenv.shared]
+DEBUG = "True"
+ALLOWED_HOSTS = "*"
+DJANGO_PORT = "8000"
+PORT = "5173"
+BASE_PATH = "/"
+DJANGO_SETTINGS_MODULE = "config.settings.base"
+AI_SERVICE_URL = "http://localhost:8001"
+AI_SERVICE_SHARED_SECRET = "dev-shared-secret-replit"
+REDIS_URL = "redis://localhost:6379/0"
