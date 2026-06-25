@@ -1,0 +1,110 @@
+Step 3 — Nginx Reverse Proxy
+Create infra/nginx/nginx.conf. This is the single entry point for all traffic — it routes /api/v1/* to Django and everything else to the React static files. Pay attention to the SSE-specific headers and the cookie forwarding.
+
+# infra/nginx/nginx.conf
+# This file handles both local dev (HTTP) and production (HTTPS via docker-compose.prod.yml).
+# TLS termination is handled by Certbot/Let's Encrypt or your load balancer in production;
+# Nginx here concerns itself only with routing and header correctness.
+
+upstream django {
+    server backend:8000;
+    keepalive 32;
+}
+
+server {
+    listen 80;
+    server_name _;
+
+    # --- Security headers ---
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    # CSP is intentionally omitted here and should be set per-environment.
+    # Add it in docker-compose.prod.yml or your cloud load balancer config.
+
+    # --- Django REST API ---
+    location /api/ {
+        proxy_pass http://django;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";    # keepalive
+        proxy_read_timeout 120s;           # long enough for async job polling
+        proxy_send_timeout 30s;
+    }
+
+    # --- SSE: chat streaming endpoint (must NOT be buffered) ---
+    location ~ ^/api/v1/chat/sessions/[^/]+/messages/$ {
+        proxy_pass http://django;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+
+        # Critical for SSE — tell Nginx and any upstream proxy not to buffer
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 300s;           # hold open for the full stream duration
+        add_header X-Accel-Buffering "no" always;
+        add_header Cache-Control "no-cache" always;
+    }
+
+    # --- React SPA (static files) ---
+    location / {
+        root /usr/share/nginx/html;
+        index index.html;
+        try_files $uri $uri/ /index.html;  # SPA fallback for react-router
+        expires 1h;
+        add_header Cache-Control "public, max-age=3600";
+    }
+
+    # Immutable cache for Vite-hashed assets
+    location ~* \.(js|css|woff2?|ttf|eot|svg|png|ico)$ {
+        root /usr/share/nginx/html;
+        expires 1y;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+}
+Update the frontend service's Dockerfile to copy the React dist/ into the Nginx image that also serves as the reverse proxy, OR keep the frontend and Nginx as separate containers (simpler in production — one service per responsibility). The architecture recommended here is separate containers: frontend serves static files from its own Nginx, and a separate nginx reverse proxy routes to both backend and frontend.
+
+If you choose separate containers, the Nginx location / block should proxy to frontend:80 instead of serving files directly:
+
+# Alternative: proxy to the frontend container instead of serving files
+location / {
+    proxy_pass http://frontend:80;
+    proxy_set_header Host $host;
+}
+STOP — manually verify these three things before continuing:
+
+curl http://localhost/api/v1/health/ returns 200 (Django is reachable through Nginx)
+curl http://localhost/ returns the React index.html (static files route correctly)
+Open DevTools → Network → open the chat page → confirm the SSE request has Content-Type: text/event-stream and messages appear without waiting for the stream to close
+Step 4 — Vite Dev Proxy (Frontend-Only Dev Mode)
+Add a proxy to frontend/vite.config.ts so that when running npm run dev, API calls to /api/v1/* are forwarded to the local Django server at localhost:8000 rather than hitting localhost:5173/api (which doesn't exist). This only applies during local development — production uses Nginx routing.
+
+// frontend/vite.config.ts  (add the server.proxy block)
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 5173,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        // Do not rewrite the path — Django expects /api/v1/... as-is
+      },
+    },
+  },
+  build: {
+    sourcemap: false,    // disable in production; enable in staging via env var
+  },
+});
+After adding this, test the flow: npm run dev → open the login page → submit credentials → confirm the POST /api/v1/auth/login/ request reaches Django (check Django logs).
+

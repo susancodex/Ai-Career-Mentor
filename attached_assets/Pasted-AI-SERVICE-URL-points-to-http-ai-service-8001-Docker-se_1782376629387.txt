@@ -1,0 +1,178 @@
+AI_SERVICE_URL points to http://ai_service:8001 (Docker service name, not localhost).
+AI Service (FastAPI)
+The service listens on 0.0.0.0:8001 (not 127.0.0.1) inside its container.
+It is not exposed on a public port in the production compose file — only reachable via the internal Docker network from the backend service.
+HMAC verification rejects requests older than 60 seconds (replay protection tested).
+GeminiClient rate limiter is unit-tested under simulated burst (not just read and assumed to work).
+Frontend (React + Vite)
+VITE_API_BASE_URL is the only place the backend base URL is set — no hardcoded localhost:8000 anywhere in production code paths.
+The Cloudinary upload helper validates file type (.pdf, .docx) and size (≤5 MB) before touching the Cloudinary API.
+The axios interceptor queues concurrent requests during a token refresh and does not fire N parallel refresh calls (test this with the test:auth-interceptor test).
+No access token is ever written to localStorage or sessionStorage.
+MSW is disabled in production builds (import.meta.env.MODE !== 'development' guard).
+STOP — verify all checklist items before continuing. Tick each one by actually reading the relevant code, not by assuming the original build was correct.
+
+3. Build in This Order
+Step 1 — Monorepo Root Structure
+Create the root directory layout. Move (don't copy) frontend/, backend/, and ai_service/ into it if they aren't already siblings. Create empty placeholders for infra/, .github/workflows/, Makefile, and README.md — don't fill them yet.
+
+Verify: ls -1 at the repo root shows exactly frontend/ backend/ ai_service/ infra/ .github/ Makefile README.md .env.example .gitignore.
+
+Remove any AI-generated scaffolding files that have no place in a production repo:
+
+replit.nix, .replit, replit.toml, or any Replit-specific config
+.aider*, .cursor*, .continue*, copilot-instructions.md, or similar AI-tool dotfiles
+Any TODO_AI.md, GENERATED_BY_AI.md, or equivalent
+Any hardcoded API keys or secrets that appear in non-.env.example files (rotate them immediately if found — treat as compromised)
+STOP — confirm the directory layout is correct and no AI scaffolding files remain.
+
+Step 2 — Unified Docker Compose (Local Dev)
+Create infra/docker-compose.yml that brings up all seven services together:
+
+# infra/docker-compose.yml
+# Local development only. For production, use docker-compose.prod.yml.
+# Run from the repo root: docker compose -f infra/docker-compose.yml up
+
+version: "3.9"
+
+services:
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: career_mentor
+      POSTGRES_USER: career_mentor
+      POSTGRES_PASSWORD: devpassword
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U career_mentor"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks: [internal]
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks: [internal]
+
+  langfuse:
+    image: langfuse/langfuse:2
+    environment:
+      DATABASE_URL: postgres://career_mentor:devpassword@postgres:5432/langfuse
+      NEXTAUTH_SECRET: devsecret
+      NEXTAUTH_URL: http://localhost:3001
+      SALT: devsalt
+    ports: ["3001:3000"]   # 3001 on host to avoid clashing with Vite dev server
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+
+  ai_service:
+    build:
+      context: ../ai_service
+      dockerfile: Dockerfile
+    env_file: ../ai_service/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    expose: ["8001"]       # internal only — NOT published to host
+    volumes:
+      - ../ai_service:/app  # bind mount for hot-reload in dev only
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    env_file: ../backend/.env
+    environment:
+      AI_SERVICE_URL: http://ai_service:8001
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ai_service:
+        condition: service_healthy
+    expose: ["8000"]
+    volumes:
+      - ../backend:/app
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  celery_worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    command: celery -A config worker -l info --concurrency=2
+    env_file: ../backend/.env
+    environment:
+      AI_SERVICE_URL: http://ai_service:8001
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ai_service:
+        condition: service_healthy
+    volumes:
+      - ../backend:/app
+    networks: [internal]
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: http://localhost/api/v1
+        VITE_CLOUDINARY_CLOUD_NAME: ${VITE_CLOUDINARY_CLOUD_NAME}
+        VITE_CLOUDINARY_UPLOAD_PRESET: ${VITE_CLOUDINARY_UPLOAD_PRESET}
+    ports: ["80:80"]
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [internal, public]
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports: ["80:80"]   # in dev, nginx handles routing; see note below
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+      - frontend
+    networks: [internal, public]
+
+networks:
+  internal:
+    driver: bridge
+    internal: false   # set true in prod for ai_service isolation
+  public:
+    driver: bridge
+
+volumes:
+  pgdata:
+Dev routing note: In local dev the frontend service builds the static bundle at container start, which is slow. For active frontend development, run npm run dev from frontend/ directly (Vite dev server on :5173) and start only the backend services: docker compose -f infra/docker-compose.yml up postgres redis ai_service backend celery_worker. The Vite proxy config (Step 3) handles /api/v1 → localhost:8000 in that mode.
+
+STOP — run docker compose -f infra/docker-compose.yml up and confirm all services reach healthy status. Check docker compose logs backend and docker compose logs ai_service for startup errors before continuing.
+
