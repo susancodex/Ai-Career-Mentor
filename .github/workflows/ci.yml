@@ -2,30 +2,52 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: ["**"]
   pull_request:
-    branches: [main]
+    branches: [main, staging]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  backend-test:
-    name: Django backend tests
+
+  frontend:
+    name: Frontend — lint, type-check, test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 10
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm run lint
+      - name: Type-check
+        run: pnpm run typecheck
+      - name: Unit tests (Vitest + MSW — no real API calls)
+        run: pnpm test --run
+
+  backend:
+    name: Backend — lint, test
     runs-on: ubuntu-latest
     # No Postgres or Redis service needed — pytest.ini points at
     # config.settings.test which uses SQLite in-memory. Django model fields
     # are all standard types (embedding is a JSONField, not pgvector), so
-    # SQLite exercises every Django code path. pgvector search is tested
-    # solely in the ai-service-test job.
-
+    # SQLite exercises every Django code path.
     env:
-      # pytest.ini sets DJANGO_SETTINGS_MODULE=config.settings.test,
-      # which overrides the env var. Set it here anyway so manage.py calls
-      # (e.g. collectstatic) also use the test settings if needed.
       DJANGO_SETTINGS_MODULE: config.settings.test
-      # Must be ≥ 32 bytes to silence SimpleJWT's InsecureKeyLengthWarning
+      # Must be >= 32 bytes to silence SimpleJWT's InsecureKeyLengthWarning
       SECRET_KEY: ci-test-secret-key-padded-to-32-bytes!!
       AI_SERVICE_SHARED_SECRET: ci-test-hmac-secret
       AI_SERVICE_URL: http://localhost:8001
-
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,23 +56,24 @@ jobs:
       - name: Install dependencies
         working-directory: backend
         run: pip install -r requirements/dev.txt
-      - name: Run tests
+      - name: Lint (ruff)
+        working-directory: backend
+        run: ruff check .
+      - name: Run tests (AI mocked — no real Gemini calls)
         working-directory: backend
         run: pytest tests/ -v
 
-  ai-service-test:
-    name: FastAPI AI service tests
+  ai-service:
+    name: AI Service — lint, test
     runs-on: ubuntu-latest
-    # No Postgres needed for the AI service tests either — DB calls in
-    # core/db.py are mocked (pool patched to None → empty-default branch).
+    # DB calls in core/db.py are mocked — no real Postgres needed.
     env:
-      GOOGLE_API_KEY: test-key-never-call-real-api
+      GOOGLE_API_KEY: test-key-never-calls-real-api
       AI_SERVICE_SHARED_SECRET: ci-test-hmac-secret
       DATABASE_URL: postgresql+asyncpg://career_mentor:testpassword@localhost:5432/career_mentor_test
       LANGFUSE_PUBLIC_KEY: ""
       LANGFUSE_SECRET_KEY: ""
       GEMINI_RPM_LIMIT: "60"
-
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -59,24 +82,9 @@ jobs:
       - name: Install dependencies
         working-directory: ai_service
         run: pip install -r requirements.txt
+      - name: Lint (ruff)
+        working-directory: ai_service
+        run: ruff check .
       - name: Run tests (LLM mocked — never hits real Gemini API)
         working-directory: ai_service
         run: pytest tests/ -v
-
-  # ---------------------------------------------------------------------------
-  # Golden tests — real Gemini API, run on schedule or manual dispatch only.
-  # NEVER run in standard PR CI: will consume free-tier quota and may 429.
-  # ---------------------------------------------------------------------------
-  # golden-tests:
-  #   name: Golden tests (real Gemini)
-  #   runs-on: ubuntu-latest
-  #   if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-  #   env:
-  #     GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY_GOLDEN }}
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-python@v5
-  #       with: { python-version: "3.12" }
-  #     - run: pip install -r ai_service/requirements.txt
-  #     - run: pytest ai_service/tests/golden/ -v
-  #       working-directory: ai_service

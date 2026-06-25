@@ -1,6 +1,15 @@
+# infra/docker-compose.yml
+# Full-stack local development — all 7 services.
+# Run from the repo root: docker compose -f infra/docker-compose.yml up
+#
+# For active frontend development, run Vite separately instead:
+#   docker compose -f infra/docker-compose.yml up postgres redis ai_service backend celery_worker
+#   cd frontend && pnpm dev   (Vite proxy handles /api → localhost:8000)
+
 version: "3.9"
 
 services:
+
   postgres:
     image: pgvector/pgvector:pg16
     environment:
@@ -17,6 +26,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks: [internal]
 
   redis:
     image: redis:7-alpine
@@ -27,66 +37,122 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    networks: [internal]
 
   # Self-hosted Langfuse — fully free, no trace cap.
-  # Omit this service and set LANGFUSE_HOST=https://cloud.langfuse.com
-  # if you'd prefer their managed free tier instead.
+  # To use the managed free tier instead, remove this service and set:
+  #   LANGFUSE_HOST=https://cloud.langfuse.com in ai_service/.env
   langfuse:
     image: langfuse/langfuse:2
     environment:
       DATABASE_URL: postgres://career_mentor:devpassword@postgres:5432/langfuse
       NEXTAUTH_SECRET: devsecret
-      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_URL: http://localhost:3001
       SALT: devsalt
     ports:
-      - "3000:3000"
+      - "3001:3000"
     depends_on:
       postgres:
         condition: service_healthy
-
-  backend:
-    build: ../backend
-    env_file: ../backend/.env
-    environment:
-      DJANGO_SETTINGS_MODULE: config.settings.dev
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    ports:
-      - "8000:8000"
-    volumes:
-      - ../backend:/app
-
-  celery_worker:
-    build: ../backend
-    command: celery -A config worker -l info
-    env_file: ../backend/.env
-    environment:
-      DJANGO_SETTINGS_MODULE: config.settings.dev
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    volumes:
-      - ../backend:/app
+    networks: [internal]
 
   ai_service:
-    build: ../ai_service
+    build:
+      context: ../ai_service
+      dockerfile: Dockerfile
     env_file: ../ai_service/.env
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      langfuse:
-        condition: service_started
+    expose: ["8001"]        # internal only — NOT published to host in prod
     ports:
-      - "8001:8001"
+      - "8001:8001"         # published in dev for direct curl testing
     volumes:
-      - ../ai_service:/app
+      - ../ai_service:/app  # bind mount for hot-reload in dev only
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    env_file: ../backend/.env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+      AI_SERVICE_URL: http://ai_service:8001
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ai_service:
+        condition: service_healthy
+    expose: ["8000"]
+    volumes:
+      - ../backend:/app
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  celery_worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    command: celery -A config worker -l info --concurrency=2
+    env_file: ../backend/.env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+      AI_SERVICE_URL: http://ai_service:8001
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ai_service:
+        condition: service_healthy
+    volumes:
+      - ../backend:/app
+    networks: [internal]
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: http://localhost/api/v1
+        VITE_CLOUDINARY_CLOUD_NAME: ${VITE_CLOUDINARY_CLOUD_NAME:-}
+        VITE_CLOUDINARY_UPLOAD_PRESET: ${VITE_CLOUDINARY_UPLOAD_PRESET:-}
+    expose: ["80"]
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [internal]
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+      - frontend
+    networks: [internal, public]
+
+networks:
+  internal:
+    driver: bridge
+  public:
+    driver: bridge
 
 volumes:
   pgdata:

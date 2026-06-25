@@ -1,0 +1,58 @@
+name: CD — Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_tag:
+        description: "Image tag to promote (e.g. sha-a1b2c3d4). Defaults to staging-latest."
+        required: false
+        default: staging-latest
+      reason:
+        description: "Why are you deploying to production?"
+        required: true
+
+concurrency:
+  group: cd-production
+  cancel-in-progress: false   # never cancel a production deploy in progress
+
+env:
+  REGISTRY: ${{ secrets.REGISTRY || 'ghcr.io' }}
+  IMAGE_PREFIX: ${{ github.repository_owner }}/ai-career-mentor
+
+jobs:
+  promote-and-deploy:
+    name: Promote staging → production
+    runs-on: ubuntu-latest
+    environment: production   # requires manual approval in GitHub Environments settings
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Re-tag staging images as production-latest
+        run: |
+          SOURCE_TAG="${{ github.event.inputs.staging_tag }}"
+          for SERVICE in backend ai-service frontend; do
+            IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${SERVICE}"
+            docker buildx imagetools create \
+              --tag "${IMAGE}:prod-latest" \
+              "${IMAGE}:${SOURCE_TAG}"
+          done
+
+      - name: Deploy to production
+        run: |
+          echo "Deploying ${{ github.event.inputs.staging_tag }} to production."
+          echo "Reason: ${{ github.event.inputs.reason }}"
+          echo "Replace this step with your production deploy command."
+          # Same pattern as staging but pointing at your production host.
+
+      - name: Run post-deploy migrations
+        run: |
+          echo "Run: docker compose exec backend python manage.py migrate --noinput"
+          echo "Replace with your remote exec command."

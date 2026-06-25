@@ -1,0 +1,40 @@
+# infra/langfuse/docker-compose.langfuse.yml
+# Self-hosted Langfuse — kept in a separate file so it can be swapped for
+# the managed free tier (cloud.langfuse.com) without touching the main stack.
+#
+# Run alongside the main stack:
+#   docker compose \
+#     -f infra/docker-compose.yml \
+#     -f infra/langfuse/docker-compose.langfuse.yml \
+#     up -d
+#
+# Or swap to cloud Langfuse by setting these env vars in ai_service/.env:
+#   LANGFUSE_HOST=https://cloud.langfuse.com
+#   LANGFUSE_PUBLIC_KEY=pk-lf-...
+#   LANGFUSE_SECRET_KEY=sk-lf-...
+# and NOT running this compose file.
+
+version: "3.9"
+
+services:
+  langfuse:
+    # Pin to a specific minor version before going to production —
+    # langfuse/langfuse:2 is a floating tag and may break on a surprise update.
+    image: langfuse/langfuse:2
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://career_mentor:devpassword@postgres:5432/langfuse
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-devsecret-change-in-prod}
+      NEXTAUTH_URL: ${LANGFUSE_URL:-http://localhost:3001}
+      SALT: ${LANGFUSE_SALT:-devsalt-change-in-prod}
+    ports:
+      - "3001:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+
+networks:
+  internal:
+    external: true
+    name: infra_internal
