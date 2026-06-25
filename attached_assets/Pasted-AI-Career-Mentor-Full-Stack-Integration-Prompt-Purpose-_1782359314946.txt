@@ -1,0 +1,116 @@
+AI Career Mentor — Full-Stack Integration Prompt
+
+
+Purpose: This prompt integrates the separately-built React frontend and Django+FastAPI
+backend into a single, production-grade monorepo. Read both the frontend-prompt.md and
+backend-prompt.md first — this document assumes both services already exist and are
+independently functional. Do not use this to build either service from scratch.
+
+
+
+
+0. Anti-Vibe-Coding Rules (read before opening any file)
+
+Integration work is where AI-assisted coding causes the most invisible damage — a wrong
+CORS_ALLOWED_ORIGINS, a missing SameSite=None on the refresh cookie, or a forwarded
+header that strips Authorization are all bugs that look fine in isolation and only surface
+under production conditions. Follow these rules without exception:
+
+
+Review every diff before accepting it, especially anything touching Nginx proxy
+config, CORS settings, cookie attributes, Docker network definitions, and the GitHub
+Actions secrets mapping. These are the surfaces where a plausible-looking mistake is
+easy to miss and hard to undo.
+Build in the increments listed below, in order. Do not jump to CI/CD before the
+local docker compose up stack is end-to-end verified. Do not wire Nginx before the
+Django→AI-service HMAC call works over the Docker network.
+At every STOP below, actually stop. Read the generated config or code, ask the
+agent to walk through it in plain language, and only continue once you can explain it
+yourself.
+Run every verification step manually. curl the endpoints directly. Check browser
+DevTools for cookie attributes. Read docker compose logs rather than assuming
+"containers are healthy" means "traffic routes correctly."
+Any TODO, stub, or "left as an exercise" in integration code is a security gap until
+resolved, not a cosmetic issue — flag it immediately.
+
+
+
+1. What This Prompt Builds
+
+ai-career-mentor/                   ← monorepo root (this prompt creates this)
+├── frontend/                       ← existing React+Vite app (move here if not already)
+├── backend/                        ← existing Django+DRF service (move here if not already)
+├── ai_service/                     ← existing FastAPI+LangGraph service (move here)
+├── infra/
+│   ├── docker-compose.yml          ← full-stack local dev (all 7 services)
+│   ├── docker-compose.prod.yml     ← production overrides (no bind mounts, pinned tags)
+│   ├── nginx/
+│   │   ├── nginx.conf              ← reverse proxy: routes /api/v1 → Django, / → React
+│   │   └── ssl/                    ← cert placeholders for prod (Let's Encrypt / cert-bot)
+│   └── langfuse/
+│       └── docker-compose.langfuse.yml  ← self-hosted Langfuse (kept separate so it can
+│                                           be swapped for the managed free tier easily)
+├── .github/
+│   └── workflows/
+│       ├── ci.yml                  ← lint + type-check + test (all 3 services, LLM mocked)
+│       ├── cd-staging.yml          ← build + push images → deploy to staging on merge to main
+│       ├── cd-prod.yml             ← promote staging images → prod on manual approval
+│       └── golden-tests.yml        ← nightly: real Gemini API, separate from normal CI
+├── .env.example                    ← merged env reference for the whole monorepo
+├── Makefile                        ← convenience targets: up, down, test, lint, migrate
+└── README.md                       ← production-grade, covers setup through deployment
+
+
+2. Pre-Integration Checklist
+
+Before writing a single line of integration code, verify these things are true of both
+existing services. If any are false, fix them in the service's own codebase first — don't
+work around them at the integration layer.
+
+Backend (Django + DRF)
+
+
+ POST /auth/refresh/ reads the refresh token from an httpOnly cookie named
+refresh_token, not from the request body or Authorization header.
+ POST /auth/logout/ clears that cookie (Max-Age=0) in the response.
+ POST /auth/login/ and POST /auth/register/ set the cookie with
+HttpOnly=true; Secure=true; SameSite=None; Path=/api/v1/auth/refresh/ in production
+(so the browser sends it on cross-origin refresh calls to the same API domain) and
+SameSite=Lax in local dev (same domain, no HTTPS).
+ CORS_ALLOWED_ORIGINS is read from an environment variable — not hardcoded.
+ CORS_ALLOW_CREDENTIALS = True is set (required for cookies over CORS).
+ POST /chat/sessions/{id}/messages/ returns Content-Type: text/event-stream with
+Cache-Control: no-cache and X-Accel-Buffering: no (Nginx must not buffer SSE).
+ Django's SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https") is set so
+it knows it's behind a TLS-terminating proxy and generates correct cookie Secure flags.
+ ALLOWED_HOSTS includes the service name backend (for Nginx→Django internal routing)
+and the public domain.
+ AI_SERVICE_URL points to http://ai_service:8001 (Docker service name, not localhost).
+
+
+AI Service (FastAPI)
+
+
+ The service listens on 0.0.0.0:8001 (not 127.0.0.1) inside its container.
+ It is not exposed on a public port in the production compose file — only reachable
+via the internal Docker network from the backend service.
+ HMAC verification rejects requests older than 60 seconds (replay protection tested).
+ GeminiClient rate limiter is unit-tested under simulated burst (not just read and
+assumed to work).
+
+
+Frontend (React + Vite)
+
+
+ VITE_API_BASE_URL is the only place the backend base URL is set — no hardcoded
+localhost:8000 anywhere in production code paths.
+ The Cloudinary upload helper validates file type (.pdf, .docx) and size (≤5 MB)
+before touching the Cloudinary API.
+ The axios interceptor queues concurrent requests during a token refresh and does not
+fire N parallel refresh calls (test this with the test:auth-interceptor test).
+ No access token is ever written to localStorage or sessionStorage.
+ MSW is disabled in production builds (import.meta.env.MODE !== 'development' guard).
+
+
+STOP — verify all checklist items before continuing. Tick each one by actually reading
+the relevant code, not by assuming the original build was correct.

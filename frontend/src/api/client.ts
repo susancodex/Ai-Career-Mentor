@@ -1,13 +1,14 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { useAuthStore } from '../store/authStore';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
 
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
   },
+  withCredentials: true,
 });
 
 let isRefreshing = false;
@@ -40,41 +41,37 @@ apiClient.interceptors.response.use(
 
     if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
       if (isRefreshing) {
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
           subscribeToRefresh((newToken: string) => {
             if (originalRequest.headers) {
               originalRequest.headers.Authorization = `Bearer ${newToken}`;
             }
             resolve(apiClient(originalRequest));
           });
+          setTimeout(() => reject(error), 10_000);
         });
       }
 
       originalRequest._retry = true;
       isRefreshing = true;
 
-      const storedRefresh = useAuthStore.getState().refreshToken;
-      if (!storedRefresh) {
-        useAuthStore.getState().logout();
-        window.location.href = '/login';
-        return Promise.reject(error);
-      }
-
       try {
-        const response = await axios.post(`${API_BASE_URL}/auth/refresh/`, {
-          refresh: storedRefresh,
-        });
-        const { access, refresh } = response.data as { access: string; refresh?: string };
-        useAuthStore.getState().setAccessToken(access, refresh);
+        const response = await axios.post(
+          `${API_BASE_URL}/auth/refresh/`,
+          {},
+          { withCredentials: true }
+        );
+        const { access } = response.data as { access: string };
+        useAuthStore.getState().setAccessToken(access);
         onTokenRefreshed(access);
         if (originalRequest.headers) {
           originalRequest.headers.Authorization = `Bearer ${access}`;
         }
         return apiClient(originalRequest);
-      } catch (refreshError) {
+      } catch {
         useAuthStore.getState().logout();
         window.location.href = '/login';
-        return Promise.reject(refreshError);
+        return Promise.reject(error);
       } finally {
         isRefreshing = false;
       }
