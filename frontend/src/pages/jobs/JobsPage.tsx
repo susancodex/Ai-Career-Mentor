@@ -8,7 +8,7 @@ import { Button } from '../../components/ui/Button';
 import { SkeletonCard } from '../../components/ui/Skeleton';
 import { ErrorState } from '../../components/ui/ErrorState';
 import { EmptyState } from '../../components/ui/EmptyState';
-import { Briefcase, ExternalLink, Bookmark, CheckCircle, XCircle, AlertTriangle, Sparkles, Building2, MapPin, DollarSign } from 'lucide-react';
+import { ExternalLink, Bookmark, CheckCircle, XCircle, AlertTriangle, Sparkles, Building2, MapPin, DollarSign } from 'lucide-react';
 
 const pageVariants = {
   hidden: { opacity: 0, y: 12 },

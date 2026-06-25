@@ -36,6 +36,8 @@ function AuthBootstrap({ children }: { children: React.ReactNode }) {
         }
       });
     }
+    // Intentionally runs once on mount — Zustand store refs are stable
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return <>{children}</>;

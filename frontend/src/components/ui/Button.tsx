@@ -1,7 +1,5 @@
 import React from 'react';
 import { Loader2 } from 'lucide-react';
-import { motion } from 'framer-motion';
-
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'danger' | 'ghost';
   size?: 'sm' | 'md' | 'lg';

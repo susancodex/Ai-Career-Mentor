@@ -7,7 +7,7 @@ import { Button } from '../../components/ui/Button';
 import { SkeletonCard } from '../../components/ui/Skeleton';
 import { ErrorState } from '../../components/ui/ErrorState';
 import { EmptyState } from '../../components/ui/EmptyState';
-import { BookOpen, CheckCircle2, Circle, Clock, ExternalLink, AlertTriangle, Sparkles, Map, Video, FileText, Code } from 'lucide-react';
+import { BookOpen, CheckCircle2, Clock, ExternalLink, AlertTriangle, Sparkles, Map, Video, FileText, Code } from 'lucide-react';
 import type { LearningResource } from '../../types';
 
 const pageVariants = {

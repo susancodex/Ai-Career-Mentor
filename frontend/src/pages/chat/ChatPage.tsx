@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useStreamingChat } from '../../hooks/useStreamingChat';
 import { Card, CardContent } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
-import { Send, Loader2, AlertTriangle, StopCircle, MessageSquare, Bot, User } from 'lucide-react';
+import { Send, AlertTriangle, StopCircle, Bot, User } from 'lucide-react';
 import { SkeletonText } from '../../components/ui/Skeleton';
 import { ErrorState } from '../../components/ui/ErrorState';
 
