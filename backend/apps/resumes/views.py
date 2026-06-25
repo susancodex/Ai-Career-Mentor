@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.permissions import IsOwner
+from core.tasks import safe_delay
 from .models import Resume, ResumeAnalysis
 from .serializers import ResumeSerializer, ResumeCreateSerializer, ResumeAnalysisSerializer
 from .tasks import analyze_resume
@@ -26,8 +27,8 @@ class ResumeListCreateView(generics.ListCreateAPIView):
         serializer = ResumeCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         resume = serializer.save(user=request.user)
-        # Enqueue async analysis — returns 201 immediately
-        analyze_resume.delay(str(resume.id))
+        # Enqueue async analysis — returns 201 immediately; safe_delay handles missing broker
+        safe_delay(analyze_resume, str(resume.id))
         return Response(ResumeSerializer(resume).data, status=status.HTTP_201_CREATED)
 
 

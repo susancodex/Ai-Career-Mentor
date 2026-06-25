@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.resumes.models import Resume
+from core.tasks import safe_apply_async
 from .models import CareerPath, SkillGap
 from .serializers import CareerPathSerializer, SkillGapSerializer
 from .tasks import generate_career_paths
@@ -32,7 +33,8 @@ class CareerPathGenerateView(APIView):
             )
 
         job_id = str(uuid.uuid4())
-        generate_career_paths.apply_async(
+        safe_apply_async(
+            generate_career_paths,
             args=[str(request.user.id), str(resume_id), target_role, job_id],
             task_id=job_id,
         )

@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.careers.models import SkillGap
+from core.tasks import safe_apply_async
 from .models import LearningRoadmap, LearningResource
 from .serializers import LearningRoadmapSerializer, LearningResourceSerializer
 from .tasks import generate_roadmap
@@ -28,7 +29,8 @@ class RoadmapGenerateView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
         job_id = str(uuid.uuid4())
-        generate_roadmap.apply_async(
+        safe_apply_async(
+            generate_roadmap,
             args=[str(request.user.id), str(skill_gap_id)],
             task_id=job_id,
         )

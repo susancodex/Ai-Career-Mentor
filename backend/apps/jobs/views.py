@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.resumes.models import Resume
+from core.tasks import safe_apply_async
 from .models import JobMatch, AsyncJob
 from .serializers import JobMatchSerializer, AsyncJobSerializer
 from .tasks import generate_job_matches
@@ -28,7 +29,8 @@ class JobMatchGenerateView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
         job_id = str(uuid.uuid4())
-        generate_job_matches.apply_async(
+        safe_apply_async(
+            generate_job_matches,
             args=[str(request.user.id), str(resume_id)],
             task_id=job_id,
         )

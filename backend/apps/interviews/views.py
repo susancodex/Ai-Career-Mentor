@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.ai_client import call_ai_service
+from core.tasks import safe_apply_async
 from .models import InterviewSession, InterviewQuestion
 from .serializers import InterviewSessionSerializer, InterviewQuestionSerializer
 from .tasks import generate_interview_questions
@@ -50,7 +51,7 @@ class InterviewQuestionsGenerateView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
         job_id = str(uuid.uuid4())
-        generate_interview_questions.apply_async(args=[str(pk)], task_id=job_id)
+        safe_apply_async(generate_interview_questions, args=[str(pk)], task_id=job_id)
         return Response({"job_id": job_id}, status=status.HTTP_202_ACCEPTED)
 
 
