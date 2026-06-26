@@ -1,2 +1,3 @@
 - [Backend stack](backend-stack.md) — Django+DRF+Celery + FastAPI AI service; free-tier (Gemini, pgvector, Langfuse, Cloudinary); all stubs documented explicitly.
 - [Replit integration setup](replit-integration.md) — How the full-stack was wired up on Replit (workflows, DB, env vars, migrations, tsconfig fix).
+- [Celery-without-Redis pattern](celery-no-redis.md) — TCP probe before every .delay()/.apply_async() prevents 20-retry hang; EventStreamRenderer needed for DRF + SSE.

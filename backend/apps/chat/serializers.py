@@ -3,7 +3,7 @@ from .models import ChatSession, ChatMessage
 
 
 class ChatMessageSerializer(serializers.ModelSerializer):
-    session_id = serializers.UUIDField(source="session_id")
+    session_id = serializers.UUIDField()
 
     class Meta:
         model = ChatMessage

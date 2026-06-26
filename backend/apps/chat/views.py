@@ -22,8 +22,18 @@ from django.conf import settings
 from django.http import StreamingHttpResponse
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.renderers import BaseRenderer, JSONRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+
+class EventStreamRenderer(BaseRenderer):
+    """Passthrough renderer so DRF content negotiation accepts Accept: text/event-stream."""
+    media_type = "text/event-stream"
+    format = "event-stream"
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        return data
 
 from core.ai_client import _headers
 from .models import ChatSession, ChatMessage
@@ -44,6 +54,7 @@ class ChatSessionCreateView(APIView):
 class ChatMessagesDispatchView(APIView):
     """GET → message list, POST → SSE stream."""
     permission_classes = [IsAuthenticated]
+    renderer_classes = [JSONRenderer, EventStreamRenderer]
 
     def get(self, request, pk):
         try:
@@ -136,6 +147,7 @@ class ChatMessagesDispatchView(APIView):
         except httpx.HTTPError as e:
             logger.error("AI service streaming error: %s", e)
             msg = "AI service unavailable. Please try again."
+            assistant_chunks.append(msg)
             yield f'data: {json.dumps({"token": msg})}\n\n'
             yield "data: [DONE]\n\n"
         finally:

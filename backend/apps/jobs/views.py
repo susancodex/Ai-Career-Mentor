@@ -71,12 +71,16 @@ class AsyncJobStatusView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, job_id):
-        from celery.result import AsyncResult
-        result = AsyncResult(str(job_id))
-        if result.state == "PENDING":
+        from core.tasks import _broker_reachable
+        if not _broker_reachable():
             return Response({"status": "pending", "result": None})
-        elif result.state == "SUCCESS":
-            return Response({"status": "done", "result": result.result})
-        elif result.state in ("FAILURE", "REVOKED"):
-            return Response({"status": "failed", "result": None})
+        try:
+            from celery.result import AsyncResult
+            result = AsyncResult(str(job_id))
+            if result.state == "SUCCESS":
+                return Response({"status": "done", "result": result.result})
+            elif result.state in ("FAILURE", "REVOKED"):
+                return Response({"status": "failed", "result": None})
+        except Exception:
+            pass
         return Response({"status": "pending", "result": None})

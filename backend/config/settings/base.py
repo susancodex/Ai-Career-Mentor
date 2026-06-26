@@ -135,6 +135,25 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = "UTC"
+# Don't retry broker connection on startup — avoids blocking Django boot when Redis is absent.
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = False
+# Override the Redis backend's default retry policy (20 retries × 1 s = 20 s hang).
+# With max_retries=1 + 1 s socket timeout the whole round-trip fails in ~2 s.
+CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {
+    "max_retries": 1,
+    "interval_start": 0,
+    "interval_step": 0,
+    "interval_max": 0,
+    "socket_timeout": 1.0,
+    "socket_connect_timeout": 1.0,
+    "retry_on_timeout": False,
+}
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    "max_retries": 1,
+    "socket_timeout": 1.0,
+    "socket_connect_timeout": 1.0,
+    "retry_on_timeout": False,
+}
 
 CORS_ALLOW_ALL_ORIGINS = DEBUG
 if not DEBUG:
