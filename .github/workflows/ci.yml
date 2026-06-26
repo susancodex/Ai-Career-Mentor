@@ -87,7 +87,7 @@ jobs:
       - name: Lint (ruff)
         run: ruff check .
       - name: Type-check (mypy)
-        run: mypy . --ignore-missing-imports
+        run: mypy .
       - name: Run tests (AI mocked — no real Gemini calls)
         run: pytest --tb=short -q
 
@@ -133,7 +133,7 @@ jobs:
       - name: Lint (ruff)
         run: ruff check .
       - name: Type-check (mypy)
-        run: mypy . --ignore-missing-imports
+        run: mypy .
       - name: Run tests (LLM mocked — never hits real Gemini API)
         run: pytest --tb=short -q
 

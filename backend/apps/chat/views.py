@@ -103,7 +103,7 @@ class ChatMessagesDispatchView(APIView):
         ai_url = f"{settings.AI_SERVICE_URL}/api/v1/chat/message"
         payload = json.dumps({
             "session_id": str(session.id),
-            "user_id": str(session.user_id),
+            "user_id": str(session.user.pk),  # type: ignore[attr-defined]
             "content": content,
         }).encode()
         headers = _headers("POST", "/api/v1/chat/message", payload)

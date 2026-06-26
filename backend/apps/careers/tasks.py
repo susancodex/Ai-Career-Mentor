@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 from celery import shared_task
 from core.ai_client import call_ai_service
 from apps.resumes.models import Resume
@@ -8,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def generate_career_paths(self, user_id: str, resume_id: str, target_role: str = "", job_id: str = None):
+def generate_career_paths(self, user_id: str, resume_id: str, target_role: str = "", job_id: Optional[str] = None):
     """
     Calls AI service, then creates one CareerPath row per path returned.
     AI service returns: {"paths": [{title, description, reasoning, match_score,
