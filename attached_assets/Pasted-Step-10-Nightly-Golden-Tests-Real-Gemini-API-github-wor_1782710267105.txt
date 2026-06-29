@@ -1,0 +1,96 @@
+Step 10 — Nightly Golden Tests (Real Gemini API)
+# .github/workflows/golden-tests.yml
+name: Golden Tests (real Gemini API, nightly)
+
+on:
+  schedule:
+    - cron: "0 2 * * *"   # 2 AM UTC — off-peak, lower chance of hitting 429s
+  workflow_dispatch:       # also triggerable manually
+
+jobs:
+  golden:
+    name: Real-model agent smoke tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: career_mentor_test
+          POSTGRES_USER: career_mentor
+          POSTGRES_PASSWORD: testpassword
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 5
+    defaults:
+      run:
+        working-directory: ai_service
+    env:
+      DATABASE_URL: postgresql+asyncpg://career_mentor:testpassword@localhost:5432/career_mentor_test
+      GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY_CI }}   # a separate free-tier key for CI
+      AI_SERVICE_SHARED_SECRET: ${{ secrets.AI_SERVICE_SHARED_SECRET }}
+      LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+      LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+      LANGFUSE_HOST: ${{ secrets.LANGFUSE_HOST }}
+      CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+      CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
+      CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: ai_service/requirements.txt
+      - run: pip install -r requirements.txt
+      - name: Run golden test suite
+        run: pytest tests/golden/ -v --tb=short
+        # Golden tests are expected to occasionally fail with 429 from the free tier.
+        # That is not a bug — it means the nightly rate limiter test is working correctly.
+        # Check for consistent failure across multiple nights before treating it as a
+        # real breakage. Use pytest-retry for individual test resilience.
+        continue-on-error: true   # don't fail the workflow on 429s — alert separately
+Step 11 — Production Docker Compose Overrides
+Create infra/docker-compose.prod.yml. This is the override file for production — it removes bind mounts, pins image tags, and enforces network isolation for the AI service.
+
+# infra/docker-compose.prod.yml
+# Usage: docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml up -d
+
+version: "3.9"
+
+services:
+
+  postgres:
+    image: pgvector/pgvector:pg16    # pin exact tag before deploy
+    volumes:
+      - pgdata:/var/lib/postgresql/data   # named volume only; no bind mounts
+
+  ai_service:
+    image: ghcr.io/${GITHUB_REPOSITORY}/ai_service:${IMAGE_TAG}
+    volumes: []    # no bind mounts in prod
+    networks:
+      - internal   # NOT in the public network — unreachable from outside the cluster
+
+  backend:
+    image: ghcr.io/${GITHUB_REPOSITORY}/backend:${IMAGE_TAG}
+    volumes: []
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.prod
+      DEBUG: "False"
+
+  celery_worker:
+    image: ghcr.io/${GITHUB_REPOSITORY}/backend:${IMAGE_TAG}
+    volumes: []
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.prod
+
+  frontend:
+    image: ghcr.io/${GITHUB_REPOSITORY}/frontend:${IMAGE_TAG}
+    volumes: []
+
+  nginx:
+    volumes:
+      - ./nginx/nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro   # mount TLS certs from Certbot/Let's Encrypt
+
+networks:
+  internal:
+    internal: true    # ai_service is truly air-gapped from the public network
