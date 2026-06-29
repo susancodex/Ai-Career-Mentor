@@ -43,6 +43,9 @@ services:
   # To use the managed free tier instead, remove this service and set:
   #   LANGFUSE_HOST=https://cloud.langfuse.com in ai_service/.env
   langfuse:
+    # PIN this to a specific minor version before going to production.
+    # langfuse/langfuse:2 is a floating tag and may break on a surprise update.
+    # Check https://github.com/langfuse/langfuse/releases and replace :2 with e.g. :2.94.1
     image: langfuse/langfuse:2
     environment:
       DATABASE_URL: postgres://career_mentor:devpassword@postgres:5432/langfuse

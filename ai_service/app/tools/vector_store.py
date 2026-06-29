@@ -8,6 +8,13 @@ The job_listings table must have the pgvector extension enabled and an
 IVFFlat or HNSW index on the embedding column:
   CREATE EXTENSION IF NOT EXISTS vector;
   CREATE INDEX ON job_listings USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+
+IMPORTANT — IVFFlat index tuning threshold:
+  IVFFlat performs poorly (worse than exact scan) when the table has fewer than
+  ~1000 rows. Until job_listings reaches that threshold, exact scan (no index hint)
+  is intentionally used. Once the table grows past ~1000 rows, create the IVFFlat
+  index above and switch the query to use it. Add a migration comment at that point
+  documenting the row count that triggered the change.
 """
 import json
 import logging

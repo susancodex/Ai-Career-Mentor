@@ -255,6 +255,18 @@ docker compose exec backend python manage.py migrate --noinput
 
 ---
 
+## 11. Ongoing Maintenance
+
+| Topic | What to do | When |
+|---|---|---|
+| **Gemini model names** | Update `GEMINI_DEFAULT_MODEL` / `GEMINI_FALLBACK_MODEL` env vars — no code change needed | When Google renames or deprecates a model |
+| **Free-tier rate limits** | Update `GEMINI_RPM_LIMIT` env var — the limiter reads it at startup, no redeploy needed | Quarterly, or when 429s increase |
+| **Langfuse image tag** | In `infra/docker-compose.yml`, replace `langfuse/langfuse:2` with a pinned minor version (e.g. `langfuse/langfuse:2.94.1`) before any production deploy | Before first production deploy; then on each intentional upgrade |
+| **pgvector index** | Once `job_listings` exceeds ~1000 rows, create the IVFFlat index in a migration and switch the vector store query to use it (see comment in `ai_service/app/tools/vector_store.py`) | When table crosses ~1000 rows |
+| **`AI_SERVICE_SHARED_SECRET` rotation** | Generate a new value with `openssl rand -hex 32`, update both `backend/.env` and `ai_service/.env` (or your secrets manager), redeploy both services simultaneously | Annually, or immediately after a suspected compromise |
+
+---
+
 ## 10. Contributing
 
 - **Branch naming**: `feat/`, `fix/`, `chore/` prefix — e.g. `feat/resume-skills-from-db`
