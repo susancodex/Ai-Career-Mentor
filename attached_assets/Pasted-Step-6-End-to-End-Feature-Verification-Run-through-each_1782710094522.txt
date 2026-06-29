@@ -1,0 +1,198 @@
+Step 6 — End-to-End Feature Verification
+Run through each feature flow manually against the fully integrated stack (all containers up via docker compose). For each flow, note the network requests in DevTools and confirm request → response shapes match the API contract in both prompts.
+
+6.1 Auth Flow
+1. POST /api/v1/auth/register/ → 201, access token in body, refresh cookie set
+2. POST /api/v1/auth/login/    → 200, same
+3. GET  /api/v1/me/            → 200 with Authorization: Bearer <access_token>
+4. Wait 15 minutes (or shorten JWT_ACCESS_TOKEN_LIFETIME_MIN to 1 for testing)
+5. Any authenticated request   → interceptor fires, POST /api/v1/auth/refresh/
+                                 → 200 { access }, retry original request transparently
+6. POST /api/v1/auth/logout/   → 204, refresh cookie cleared
+7. GET  /api/v1/me/            → 401 (session gone)
+6.2 Resume Upload Flow
+1. Drag PDF onto dropzone → client validates type + size → upload to Cloudinary
+2. Cloudinary returns { secure_url, public_id }
+3. POST /api/v1/resumes/ { cloudinary_url, cloudinary_public_id, original_filename }
+4. Response: 201 Resume { id, status: "uploaded" }
+5. Poll GET /api/v1/resumes/{id}/ every 3s → status: "parsing" → "parsed"
+6. GET /api/v1/resumes/{id}/analysis/ → 200 ResumeAnalysis (skills, experience, education)
+7. Skills visible on Resume page, Careers page unlocked
+If status stays uploaded for > 30 seconds, check Celery worker logs — the task may have failed silently. Check Django logs for the HMAC-signed call to the AI service.
+
+6.3 Async AI Feature Flows (Career Paths, Job Matches, Learning Roadmap, Interview Qs)
+All follow the same pattern:
+
+1. POST .../generate/ → 202 { job_id }
+2. Poll GET /api/v1/jobs/async-status/{job_id}/ every 2s
+3. When status === "done", re-fetch the list endpoint (or read result from status response)
+4. Render results
+Verify that a 429 from Gemini surfaces as a user-readable error state on the page, not a spinner that never resolves or a silent undefined.
+
+6.4 Chat Streaming Flow
+1. POST /api/v1/chat/sessions/ → 201 { id }
+2. POST /api/v1/chat/sessions/{id}/messages/ { content: "..." }
+   → Content-Type: text/event-stream
+   → tokens arrive as: data: {"token": "Hello"}\n\n
+   → stream ends with: data: {"done": true}\n\n
+3. Tokens render progressively in the UI as they arrive
+4. Final message persisted: GET /api/v1/chat/sessions/{id}/messages/ → shows both turns
+Confirm in Nginx logs that the SSE connection stays open for the full stream duration and does not get buffered (responses should appear character-by-character in DevTools, not all at once at the end).
+
+STOP — all 4 flows must pass manually before building CI/CD. Green CI on broken integration is worse than failing CI — it erodes trust in the pipeline.
+
+Step 7 — GitHub Actions CI Pipeline
+Create .github/workflows/ci.yml. This runs on every push and pull request. The LLM is always mocked — no real Gemini calls in CI. Keep the three services' test suites in separate jobs so failures are localized.
+
+# .github/workflows/ci.yml
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main, staging]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  frontend:
+    name: Frontend — lint, type-check, test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run type-check
+      - run: npm run test -- --run   # Vitest, non-interactive
+      - name: Build (verify production bundle compiles)
+        run: npm run build
+        env:
+          VITE_API_BASE_URL: https://api.example.com/api/v1
+          VITE_CLOUDINARY_CLOUD_NAME: test
+          VITE_CLOUDINARY_UPLOAD_PRESET: test_preset
+
+  backend:
+    name: Backend — lint, type-check, test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: career_mentor_test
+          POSTGRES_USER: career_mentor
+          POSTGRES_PASSWORD: testpassword
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: postgres://career_mentor:testpassword@localhost:5432/career_mentor_test
+      REDIS_URL: redis://localhost:6379/0
+      DJANGO_SETTINGS_MODULE: config.settings.test
+      SECRET_KEY: ci-test-secret-key-not-used-in-prod
+      AI_SERVICE_URL: http://localhost:8001   # mocked — never called in unit tests
+      AI_SERVICE_SHARED_SECRET: ci-test-hmac-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements/dev.txt
+      - run: pip install -r requirements/dev.txt
+      - run: ruff check .
+      - run: mypy .
+      - run: pytest --tb=short -q
+
+  ai_service:
+    name: AI Service — lint, type-check, test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: career_mentor_test
+          POSTGRES_USER: career_mentor
+          POSTGRES_PASSWORD: testpassword
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: ai_service
+    env:
+      DATABASE_URL: postgresql+asyncpg://career_mentor:testpassword@localhost:5432/career_mentor_test
+      GOOGLE_API_KEY: ci-placeholder-never-used   # tests mock get_llm() at the boundary
+      AI_SERVICE_SHARED_SECRET: ci-test-hmac-secret
+      LANGFUSE_PUBLIC_KEY: ci-placeholder
+      LANGFUSE_SECRET_KEY: ci-placeholder
+      LANGFUSE_HOST: http://localhost:3001         # not started in CI — handler is mocked
+      CLOUDINARY_CLOUD_NAME: ci-placeholder
+      CLOUDINARY_API_KEY: ci-placeholder
+      CLOUDINARY_API_SECRET: ci-placeholder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: ai_service/requirements.txt
+      - run: pip install -r requirements.txt
+      - run: ruff check .
+      - run: mypy .
+      - run: pytest --tb=short -q
+
+  docker-build:
+    name: Docker — verify all images build
+    runs-on: ubuntu-latest
+    needs: [frontend, backend, ai_service]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: frontend
+          push: false
+          build-args: |
+            VITE_API_BASE_URL=https://api.example.com/api/v1
+            VITE_CLOUDINARY_CLOUD_NAME=test
+            VITE_CLOUDINARY_UPLOAD_PRESET=test_preset
+      - name: Build backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: backend
+          push: false
+      - name: Build ai_service image
+        uses: docker/build-push-action@v5
+        with:
+          context: ai_service
+          push: false
