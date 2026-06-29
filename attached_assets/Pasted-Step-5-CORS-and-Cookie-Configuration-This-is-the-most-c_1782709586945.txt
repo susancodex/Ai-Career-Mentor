@@ -1,0 +1,44 @@
+Step 5 — CORS and Cookie Configuration
+This is the most common integration failure point. Both the Django CORS config and the cookie attributes must match the actual origins in use. Review the following settings in backend/config/settings/base.py and confirm each one:
+
+# backend/config/settings/base.py
+
+# django-cors-headers
+CORS_ALLOW_CREDENTIALS = True   # REQUIRED: allows browsers to send cookies cross-origin
+
+CORS_ALLOWED_ORIGINS = env.list(
+    "CORS_ALLOWED_ORIGINS",
+    default=["http://localhost:5173", "http://localhost:80"],
+)
+
+# Expose the Authorization header so axios can read it (not strictly needed if
+# you're using cookies for refresh and Bearer tokens for auth, but belt-and-suspenders)
+CORS_EXPOSE_HEADERS = ["Content-Type", "X-CSRFToken"]
+
+# Tell Django it's behind a TLS-terminating proxy (Nginx or load balancer)
+USE_X_FORWARDED_HOST = True
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+# backend/apps/users/views.py  (login + register response)
+# The refresh token cookie must be set with these exact attributes in production:
+response.set_cookie(
+    key="refresh_token",
+    value=str(refresh),
+    httponly=True,
+    secure=not settings.DEBUG,       # False in local dev (no HTTPS), True in prod
+    samesite="None" if not settings.DEBUG else "Lax",
+    # SameSite=None is required for cross-origin cookies (frontend ≠ API domain).
+    # SameSite=None MUST be paired with Secure=True — browsers reject it otherwise.
+    # In local dev, SameSite=Lax is fine because both run on localhost.
+    max_age=settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds(),
+    path="/api/v1/auth/refresh/",    # Scoped: browser only sends this cookie to the
+                                     # refresh endpoint, nowhere else.
+)
+STOP — open browser DevTools → Application → Cookies after logging in and verify:
+
+The refresh_token cookie exists
+HttpOnly is checked
+Secure matches your environment (false in HTTP dev, true in HTTPS prod)
+SameSite is None in prod / Lax in dev
+Path is /api/v1/auth/refresh/
+If any attribute is wrong, fix set_cookie() and re-test before continuing.
+
