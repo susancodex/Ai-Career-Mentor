@@ -1,0 +1,38 @@
+4. Security Checklist (Integration-Specific)
+Work through this list after all services are running end-to-end. Fix before declaring integration complete.
+
+AI_SERVICE_SHARED_SECRET is never logged anywhere (check Django's request logger and the FastAPI access logger — the Authorization / X-Signature headers that carry the HMAC must be scrubbed)
+The ai_service container has no published port in docker-compose.prod.yml and is only on the internal network
+Refresh cookie has HttpOnly, Secure, SameSite=None in production (verify in DevTools after logging in through the production Nginx, not just the dev stack)
+VITE_API_BASE_URL and the two Cloudinary public values are the only secrets in the frontend bundle — run grep -r "SECRET\|PASSWORD\|API_KEY" frontend/dist/ and confirm zero matches before deploying
+Nginx does not forward X-Real-IP or X-Forwarded-For from untrusted sources (fine on a single-host VPS; if behind a CDN, pin the CDN's IP range)
+Django's DEBUG=False in production — a DEBUG=True leak exposes your entire settings module in error pages
+GOOGLE_API_KEY is not in any log line — add a log scrubber or use Django's LOGGING filters to redact GOOGLE_API_KEY if it could appear in tracebacks
+The Langfuse dashboard (port 3001) is not publicly accessible without authentication
+npm audit passes (or all flagged issues are accepted with a documented reason) in CI
+pip-audit passes for both backend/ and ai_service/ requirements
+5. README.md (Production-Grade)
+The README must include all of the following sections — write them for a new engineer who has never seen this codebase:
+
+Project Overview — what the product does, who it's for, what makes it technically interesting (agentic AI with LangGraph, free-tier stack, SSE streaming)
+Architecture Diagram — text or Mermaid diagram showing Browser → Nginx → Django → AI Service → Gemini, and the Cloudinary direct upload path
+Local Development Setup — exact commands from git clone to make up, including prerequisites (Docker, Node 20, Python 3.12) and how to get each required external credential (Gemini API key, Cloudinary account, Langfuse)
+Environment Variables — table of every variable, whether it's required, and where to get its value
+Running Tests — make test and what each service's suite covers; how to run golden tests manually and what a 429 failure means
+Project Structure — annotated directory tree explaining each top-level folder
+API Reference — link to the OpenAPI docs served by Django (/api/v1/schema/swagger-ui/) and FastAPI (/docs) when running locally
+Deployment Guide — how to deploy to staging (merge to main) and production (manual cd-prod.yml dispatch), what GitHub secrets to configure, and how to run migrations post-deploy
+Free-Tier Constraints — explicit documentation of the Gemini RPM/RPD limits, Cloudinary storage cap, and how the system degrades gracefully at each limit
+Contributing — branch naming, PR expectations, the STOP checkpoint discipline
+6. Definition of Done for Integration
+The integration is complete when all of the following are true — not "most of them" or "all except the ones that are hard":
+
+make up from a clean checkout (no .env files except the filled-in .env) brings all 7 services to healthy within 3 minutes
+All 4 feature flows in Step 6 pass manually end-to-end through the full container stack (not against Vite dev server + direct localhost:8000)
+make test (all three services) passes in under 5 minutes with no real Gemini calls
+All CI jobs in ci.yml pass on a fresh branch push
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml config produces a valid compose file with no bind mounts and ai_service on the internal network only
+All items in the Security Checklist (Section 4) are ticked
+The README covers all 10 sections in Section 5 and is readable by someone new to the codebase
+No AI scaffolding files (replit.*, .aider*, TODO_AI.md, etc.) remain in the repo
+git log --oneline reflects incremental, reviewable commits — not "add all files" as a single commit
