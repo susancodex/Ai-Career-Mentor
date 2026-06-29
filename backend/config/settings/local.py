@@ -1,4 +1,5 @@
 from .base import *
+import os
 
 DEBUG = True
 ALLOWED_HOSTS = ["*"]
@@ -34,5 +35,8 @@ LOGGING = {
 
 CELERY_TASK_ALWAYS_EAGER = True
 CELERY_TASK_EAGER_PROPAGATES = True
+
+DJANGO_ALLOW_ASYNC_UNSAFE = True
+os.environ.setdefault("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
 
 SENTRY_DSN = ""

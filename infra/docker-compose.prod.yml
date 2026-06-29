@@ -41,6 +41,7 @@ services:
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.prod
       DEBUG: "False"
+      DJANGO_ALLOW_ASYNC_UNSAFE: "true"
 
   celery_worker:
     image: ${BACKEND_IMAGE:-ai-career-mentor-backend:latest}
@@ -51,6 +52,7 @@ services:
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.prod
       DEBUG: "False"
+      DJANGO_ALLOW_ASYNC_UNSAFE: "true"
 
   frontend:
     image: ${FRONTEND_IMAGE:-ai-career-mentor-frontend:latest}
@@ -65,7 +67,7 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
       - ./nginx/ssl:/etc/nginx/ssl:ro
     networks: [internal, public]
 

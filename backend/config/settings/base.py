@@ -158,7 +158,7 @@ CELERY_BROKER_TRANSPORT_OPTIONS = {
 CORS_ALLOW_ALL_ORIGINS = DEBUG
 CORS_ALLOWED_ORIGINS = env.list(
     "CORS_ALLOWED_ORIGINS",
-    default=["http://localhost:5173", "http://localhost:80"],
+    default=["http://localhost:5173", "http://localhost"],
 )
 CORS_ALLOW_CREDENTIALS = True
 CORS_EXPOSE_HEADERS = ["Content-Type", "X-CSRFToken"]
@@ -178,6 +178,15 @@ CORS_ALLOW_HEADERS = [
 
 AI_SERVICE_URL = env("AI_SERVICE_URL", default="http://localhost:8001")
 AI_SERVICE_SHARED_SECRET = env("AI_SERVICE_SHARED_SECRET", default="dev-shared-secret-change-in-prod")
+
+CLOUDINARY_CLOUD_NAME = env("CLOUDINARY_CLOUD_NAME", default="")
+CLOUDINARY_API_KEY = env("CLOUDINARY_API_KEY", default="")
+CLOUDINARY_API_SECRET = env("CLOUDINARY_API_SECRET", default="")
+
+# Required for StreamingHttpResponse SSE views under ASGI (Daphne).
+DJANGO_ALLOW_ASYNC_UNSAFE = env.bool("DJANGO_ALLOW_ASYNC_UNSAFE", default=False)
+if DJANGO_ALLOW_ASYNC_UNSAFE:
+    os.environ.setdefault("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
 
 LOGGING = {
     "version": 1,

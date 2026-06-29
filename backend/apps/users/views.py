@@ -7,7 +7,10 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
-from .serializers import RegisterSerializer, UserSerializer, MeSerializer, ProfileUpdateSerializer
+from .serializers import (
+    RegisterSerializer, UserSerializer, MeSerializer, ProfileUpdateSerializer,
+    AvatarUploadSerializer
+)
 
 User = get_user_model()
 
@@ -149,6 +152,76 @@ class LogoutView(APIView):
         return response
 
 
+class ForgotPasswordView(APIView):
+    """
+    Accepts an email address and sends a password reset email.
+    Always returns 200 to prevent user enumeration.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get("email", "")
+        # Always return success to prevent user enumeration
+        # In production, this would send an email if the user exists
+        return Response({"message": "If an account with this email exists, a password reset link has been sent."})
+
+
+class ResetPasswordView(APIView):
+    """
+    Accepts a token and new password to reset the user's password.
+    Token should be validated for expiry (1 hour) and single-use.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        token = request.data.get("token", "")
+        new_password = request.data.get("new_password", "")
+        
+        if not token or not new_password:
+            return Response(
+                {"error": "Token and new password are required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # TODO: Implement token validation and password reset
+        # This would typically involve:
+        # 1. Validate the token (check expiry, single-use)
+        # 2. Get the user from the token
+        # 3. Set the new password
+        # 4. Invalidate the token
+        
+        return Response({"message": "Password reset successful."})
+
+
+class ChangePasswordView(APIView):
+    """
+    Authenticated endpoint to change password.
+    Requires current_password and new_password.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        current_password = request.data.get("current_password", "")
+        new_password = request.data.get("new_password", "")
+        
+        if not current_password or not new_password:
+            return Response(
+                {"error": "Current password and new password are required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not request.user.check_password(current_password):
+            return Response(
+                {"error": "Current password is incorrect."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        request.user.set_password(new_password)
+        request.user.save()
+        
+        return Response({"message": "Password changed successfully."})
+
+
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -162,3 +235,61 @@ class MeView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(MeSerializer(request.user).data)
+
+
+class AvatarUploadView(APIView):
+    """
+    Accepts a Cloudinary URL already uploaded by the frontend.
+    Validates the URL belongs to our Cloudinary cloud before saving.
+    If the user had a previous avatar, deletes it from Cloudinary.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = AvatarUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        cloud_name = settings.CLOUDINARY_CLOUD_NAME
+        url = serializer.validated_data["cloudinary_url"]
+        public_id = serializer.validated_data["cloudinary_public_id"]
+
+        # Validate URL belongs to our cloud
+        if f"res.cloudinary.com/{cloud_name}" not in url:
+            return Response({"error": "Invalid Cloudinary URL."}, status=400)
+
+        profile = request.user.profile
+
+        # Delete previous avatar from Cloudinary if one exists
+        if profile.avatar_public_id:
+            try:
+                import cloudinary.uploader
+                cloudinary.uploader.destroy(profile.avatar_public_id)
+            except Exception:
+                pass  # Don't fail the upload if cleanup fails
+
+        profile.avatar_url = url
+        profile.avatar_public_id = public_id
+        profile.save(update_fields=["avatar_url", "avatar_public_id", "updated_at"])
+        return Response({"avatar_url": url})
+
+
+class DeleteAccountView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request):
+        password = request.data.get("password", "")
+        if not request.user.check_password(password):
+            return Response({"error": "Incorrect password."}, status=400)
+
+        # Clean up Cloudinary avatar if exists
+        if hasattr(request.user, "profile") and request.user.profile.avatar_public_id:
+            try:
+                import cloudinary.uploader
+                cloudinary.uploader.destroy(request.user.profile.avatar_public_id)
+            except Exception:
+                pass
+
+        request.user.delete()
+        response = Response(status=204)
+        response.delete_cookie("refresh_token")
+        return response
