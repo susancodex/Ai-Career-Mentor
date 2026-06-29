@@ -17,10 +17,38 @@ from fastapi.responses import JSONResponse
 from app.api.v1 import resume, career, jobs, interview, learning, chat
 from app.core.config import settings
 
+class _SensitiveDataFilter(logging.Filter):
+    """Redact GOOGLE_API_KEY and AI_SERVICE_SHARED_SECRET from all log records.
+
+    Google SDK exceptions occasionally include the API key in their message
+    (e.g. authentication error details). This filter ensures the key never
+    reaches log sinks regardless of how an exception is formatted.
+    """
+    def __init__(self) -> None:
+        super().__init__()
+        self._secrets: list[str] = []
+        for var in ("GOOGLE_API_KEY", "AI_SERVICE_SHARED_SECRET"):
+            val = os.environ.get(var, "")
+            if val and len(val) > 8:
+                self._secrets.append(val)
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if self._secrets:
+            msg = record.getMessage()
+            for secret in self._secrets:
+                if secret in msg:
+                    record.msg = record.msg.replace(secret, "[REDACTED]")
+                    record.args = ()
+        return True
+
+
+_sensitive_filter = _SensitiveDataFilter()
+
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
 )
+logging.getLogger().addFilter(_sensitive_filter)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
