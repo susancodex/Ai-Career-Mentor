@@ -3,11 +3,9 @@ import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 
-async function prepare() {
-  if (import.meta.env.MODE === 'development') {
-    const { worker } = await import('./mocks/browser');
-    return worker.start({ onUnhandledRequest: 'bypass' });
-  }
+function prepare() {
+  // MSW mock layer removed — all API calls go to the real backend.
+  return Promise.resolve();
 }
 
 prepare().then(() => {

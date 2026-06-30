@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { generateJobMatches, getJobMatches, updateJobMatch } from '../../api/jobs';
+import { useResumeUpload } from '../../hooks/useResumeUpload';
 import { Card, CardContent } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
@@ -30,6 +31,8 @@ const itemVariants = {
 
 export function JobsPage() {
   const queryClient = useQueryClient();
+  const { resumes } = useResumeUpload();
+  const selectedResumeId = resumes.find((r) => r.status === 'parsed')?.id || '';
   const [rateLimitError, setRateLimitError] = useState<string | null>(null);
   const [retryAfter, setRetryAfter] = useState(0);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -49,7 +52,7 @@ export function JobsPage() {
   });
 
   const generateMutation = useMutation({
-    mutationFn: () => generateJobMatches('resume-1'),
+    mutationFn: () => generateJobMatches(selectedResumeId),
     onMutate: () => {
       setRateLimitError(null);
       setIsGenerating(true);

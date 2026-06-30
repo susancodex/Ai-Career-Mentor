@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { generateRoadmap, getRoadmaps, updateResource } from '../../api/learning';
+import { getSkillGaps } from '../../api/careers';
+import { useResumeUpload } from '../../hooks/useResumeUpload';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { SkeletonCard } from '../../components/ui/Skeleton';
@@ -30,6 +32,8 @@ const itemVariants = {
 
 export function LearningPage() {
   const queryClient = useQueryClient();
+  const { resumes } = useResumeUpload();
+  const selectedResumeId = resumes.find((r) => r.status === 'parsed')?.id || '';
   const [rateLimitError, setRateLimitError] = useState<string | null>(null);
   const [retryAfter, setRetryAfter] = useState(0);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -48,8 +52,14 @@ export function LearningPage() {
     refetchIntervalInBackground: false,
   });
 
+  const skillGapsQuery = useQuery({
+    queryKey: ['skill-gaps', selectedResumeId],
+    queryFn: () => getSkillGaps(selectedResumeId),
+    enabled: !!selectedResumeId,
+  });
+
   const generateMutation = useMutation({
-    mutationFn: () => generateRoadmap('gap-1'),
+    mutationFn: () => generateRoadmap(skillGapsQuery.data?.id || ''),
     onMutate: () => {
       setRateLimitError(null);
       setIsGenerating(true);

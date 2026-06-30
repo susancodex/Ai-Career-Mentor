@@ -21,6 +21,7 @@ class CareerPath(models.Model):
 
     class Meta:
         ordering = ["-match_score", "-created_at"]
+        unique_together = [["user", "resume", "target_role"]]
 
 
 class SkillGap(models.Model):

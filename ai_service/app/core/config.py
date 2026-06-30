@@ -26,6 +26,10 @@ class Settings(BaseSettings):
 
     GEMINI_RPM_LIMIT: int = 8
 
+    TAVILY_API_KEY: str | None = None
+    AGENT_GRAPH_MAX_RETRIES_PER_NODE: int = 2
+    AGENT_GRAPH_NODE_TIMEOUT_SECONDS: int = 45
+
     @field_validator("AI_SERVICE_SHARED_SECRET")
     @classmethod
     def secret_must_be_set(cls, value: str) -> str:

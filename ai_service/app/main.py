@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.v1 import resume, career, jobs, interview, learning, chat
+from app.api.v1 import resume, career, jobs, interview, learning, chat, agents
 from app.core.config import settings
 
 class _SensitiveDataFilter(logging.Filter):
@@ -74,6 +74,7 @@ app.include_router(jobs.router, prefix="/api/v1")
 app.include_router(interview.router, prefix="/api/v1")
 app.include_router(learning.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")
+app.include_router(agents.router, prefix="/api/v1")
 
 
 @app.get("/health")

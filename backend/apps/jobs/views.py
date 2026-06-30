@@ -1,8 +1,11 @@
+import logging
 import uuid
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+logger = logging.getLogger(__name__)
 
 from apps.resumes.models import Resume
 from core.tasks import safe_apply_async
@@ -85,9 +88,9 @@ class AsyncJobStatusView(APIView):
                     job = AsyncJob.objects.filter(celery_task_id=job_id).first()
                     if job and job.error_message:
                         return Response({"status": "failed", "error": job.error_message})
-                except Exception:
-                    pass
+                except Exception as db_exc:
+                    logger.exception("Failed to load AsyncJob for %s: %s", job_id, db_exc)
                 return Response({"status": "failed", "error": "Processing failed. Try again."})
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.exception("Async job status lookup failed for %s: %s", job_id, exc)
         return Response({"status": "pending", "result": None})

@@ -24,6 +24,7 @@ async def skill_gaps(request: Request, body: SkillGapRequest):
             resume_skills=analysis["skills"],
             target_role=body.target_role,
             session_id=body.resume_id,
+            resume_analysis=analysis,
         )
         return result
     except ValueError as e:

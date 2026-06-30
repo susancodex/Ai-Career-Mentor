@@ -42,10 +42,38 @@ async def run_question_generator(
     target_role: str,
     session_id: str,
     agent_session_id: Optional[str] = None,
+    resume_id: Optional[str] = None,
 ) -> InterviewQuestionsResult:
     llm = get_llm(session_id=agent_session_id)
+
+    # Fetch real resume context when available so questions are anchored to
+    # the candidate's actual experience rather than generic role questions.
+    resume_block = ""
+    if resume_id:
+        try:
+            from app.core.db import get_resume_analysis
+            analysis = await get_resume_analysis(resume_id)
+            if analysis.get("skills") or analysis.get("experience"):
+                experience_lines = "\n".join(
+                    f"- {e.get('title', 'Role')} at {e.get('company', 'Company')} "
+                    f"({e.get('start_date') or '?'}–{e.get('end_date') or 'Present'})"
+                    for e in analysis.get("experience", [])[:5]
+                )
+                resume_block = (
+                    "\n\nCANDIDATE'S ACTUAL RESUME CONTEXT:\n"
+                    f"Skills: {', '.join(analysis.get('skills', []))}\n"
+                    f"Experience:\n{experience_lines}\n"
+                    f"Education: {', '.join(e.get('degree', '') for e in analysis.get('education', []))}\n"
+                    "\nRequirements:\n"
+                    "- At least 4 questions must reference SPECIFIC items from the resume above "
+                    "(a named project, technology, company, or transition).\n"
+                    "- Remaining questions should be standard role-appropriate questions.\n"
+                )
+        except Exception:
+            logger.exception("Failed to load resume context for interview questions (resume_id=%s)", resume_id)
+
     messages = [
-        SystemMessage(content=_QUESTION_SYSTEM),
+        SystemMessage(content=_QUESTION_SYSTEM + resume_block),
         HumanMessage(content=f"Target role (data): {target_role}"),
     ]
     response = await invoke_with_backoff(llm, messages)

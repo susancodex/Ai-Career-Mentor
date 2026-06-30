@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { generateCareerPaths, getCareerPaths, getSkillGaps } from '../../api/careers';
+import { useResumeUpload } from '../../hooks/useResumeUpload';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
@@ -34,6 +35,8 @@ const itemVariants = {
 
 export function CareersPage() {
   const queryClient = useQueryClient();
+  const { resumes } = useResumeUpload();
+  const selectedResumeId = resumes.find((r) => r.status === 'parsed')?.id || '';
   const [rateLimitError, setRateLimitError] = useState<string | null>(null);
   const [retryAfter, setRetryAfter] = useState(0);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -53,13 +56,13 @@ export function CareersPage() {
   });
 
   const skillGapQuery = useQuery({
-    queryKey: ['skill-gaps', 'resume-1'],
-    queryFn: () => getSkillGaps('resume-1'),
-    enabled: pathsQuery.isSuccess,
+    queryKey: ['skill-gaps', selectedResumeId],
+    queryFn: () => getSkillGaps(selectedResumeId),
+    enabled: pathsQuery.isSuccess && !!selectedResumeId,
   });
 
   const generateMutation = useMutation({
-    mutationFn: () => generateCareerPaths('resume-1'),
+    mutationFn: () => generateCareerPaths(selectedResumeId),
     onMutate: () => {
       setRateLimitError(null);
       setIsGenerating(true);
@@ -68,7 +71,7 @@ export function CareersPage() {
       setTimeout(() => {
         setIsGenerating(false);
         queryClient.invalidateQueries({ queryKey: ['career-paths'] });
-        queryClient.invalidateQueries({ queryKey: ['skill-gaps', 'resume-1'] });
+        queryClient.invalidateQueries({ queryKey: ['skill-gaps', selectedResumeId] });
       }, 2000);
     },
     onError: (error: Error) => {
