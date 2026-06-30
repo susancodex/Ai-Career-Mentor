@@ -1,7 +1,7 @@
 import { apiClient, API_BASE_URL } from './client';
 import axios from 'axios';
 import type { User } from '../types';
-import type { LoginInput, RegisterInput, ProfileUpdateInput } from '../lib/zodSchemas';
+import type { LoginInput, RegisterInput, ProfileUpdateInput, ChangePasswordInput } from '../lib/zodSchemas';
 
 export interface AuthResponse {
   user: User;
@@ -43,4 +43,31 @@ export async function getProfile(): Promise<User> {
 export async function updateProfile(data: ProfileUpdateInput): Promise<User> {
   const response = await apiClient.patch('/me/', data);
   return response.data;
+}
+
+export async function uploadAvatar(payload: {
+  cloudinary_url: string;
+  cloudinary_public_id: string;
+}): Promise<{ avatar_url: string }> {
+  const response = await apiClient.post('/me/avatar/', payload);
+  return response.data;
+}
+
+export async function changePassword(data: ChangePasswordInput): Promise<void> {
+  await apiClient.post('/me/password/change/', {
+    current_password: data.current_password,
+    new_password: data.new_password,
+  });
+}
+
+export async function deleteAccount(password: string): Promise<void> {
+  await apiClient.delete('/me/delete/', { data: { password } });
+}
+
+export async function forgotPassword(email: string): Promise<void> {
+  await apiClient.post('/auth/password/forgot/', { email });
+}
+
+export async function resetPassword(token: string, new_password: string): Promise<void> {
+  await apiClient.post('/auth/password/reset/', { token, new_password });
 }

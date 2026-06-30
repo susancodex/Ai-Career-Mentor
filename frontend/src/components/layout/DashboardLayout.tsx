@@ -9,12 +9,13 @@ import {
   LogOut,
   Menu,
   X,
-  User,
-  Sparkles
+  Sparkles,
+  Settings,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import { motion, AnimatePresence } from 'framer-motion';
+import type { Profile } from '../../types';
 
 const navItems = [
   { to: '/dashboard', label: 'Overview', icon: Compass },
@@ -26,6 +27,30 @@ const navItems = [
   { to: '/chat', label: 'AI Coach', icon: Sparkles },
 ];
 
+function UserAvatar({ profile, fullName }: { profile?: Profile; fullName?: string }) {
+  const initials = (fullName || '?')
+    .split(' ')
+    .map((n) => n[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2);
+
+  if (profile?.avatar_url) {
+    return (
+      <img
+        src={profile.avatar_url}
+        alt={fullName}
+        className="w-9 h-9 rounded-full object-cover ring-2 ring-slate-700"
+      />
+    );
+  }
+  return (
+    <div className="w-9 h-9 rounded-full bg-teal-700 flex items-center justify-center shrink-0 text-sm font-bold text-white">
+      {initials}
+    </div>
+  );
+}
+
 export function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const { user, logout } = useAuth();
@@ -35,9 +60,7 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
     setMobileOpen(false);
   }, [location.pathname]);
 
-  const handleLogout = () => {
-    logout();
-  };
+  const profile = user?.profile;
 
   return (
     <div className="min-h-[100dvh] bg-background flex w-full overflow-hidden text-slate-900">
@@ -70,7 +93,7 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
                       layoutId="activeNav"
                       className="absolute left-0 w-1 h-5 bg-primary rounded-r-full"
                       initial={false}
-                      transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                      transition={{ type: 'spring', stiffness: 300, damping: 30 }}
                     />
                   )}
                   <item.icon className={`w-5 h-5 transition-colors ${isActive ? 'text-primary' : 'text-slate-500 group-hover:text-slate-300'}`} />
@@ -81,20 +104,35 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
           ))}
         </nav>
 
-        <div className="p-4 border-t border-sidebar-border bg-sidebar-bg/50">
-          <div className="flex items-center gap-3 mb-4 px-2">
-            <div className="w-9 h-9 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center shrink-0">
-              <User className="w-4 h-4 text-slate-300" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-bold text-white truncate">
-                {user?.full_name || 'User'}
-              </p>
-              <p className="text-xs text-slate-400 truncate">{user?.email}</p>
-            </div>
-          </div>
+        <div className="p-4 border-t border-sidebar-border bg-sidebar-bg/50 space-y-2">
+          {/* Profile link */}
+          <NavLink
+            to="/profile"
+            className={({ isActive }) =>
+              `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                isActive
+                  ? 'bg-sidebar-accent text-white'
+                  : 'hover:bg-white/5'
+              }`
+            }
+          >
+            {({ isActive }) => (
+              <>
+                <UserAvatar profile={profile} fullName={user?.full_name} />
+                <div className="flex-1 min-w-0">
+                  <p className={`text-sm font-bold truncate ${isActive ? 'text-white' : 'text-white'}`}>
+                    {user?.full_name || 'User'}
+                  </p>
+                  <p className="text-xs text-slate-400 truncate">{user?.email}</p>
+                </div>
+                <Settings className={`w-4 h-4 shrink-0 ${isActive ? 'text-primary' : 'text-slate-500'}`} />
+              </>
+            )}
+          </NavLink>
+
+          {/* Sign out */}
           <button
-            onClick={handleLogout}
+            onClick={() => logout()}
             className="flex items-center gap-2 w-full px-3 py-2 text-sm font-medium text-slate-400 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
           >
             <LogOut className="w-4 h-4" />
@@ -145,9 +183,20 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
                     {item.label}
                   </NavLink>
                 ))}
+                <NavLink
+                  to="/profile"
+                  className={({ isActive }) =>
+                    `flex items-center gap-3 px-3 py-3 rounded-lg text-sm font-semibold transition-colors ${
+                      isActive ? 'bg-slate-50 text-primary' : 'text-slate-600 hover:bg-slate-50'
+                    }`
+                  }
+                >
+                  <Settings className="w-5 h-5" />
+                  Profile & Settings
+                </NavLink>
                 <div className="pt-4 mt-2 border-t border-slate-100">
                   <button
-                    onClick={handleLogout}
+                    onClick={() => logout()}
                     className="flex items-center gap-3 px-3 py-3 rounded-lg text-sm font-semibold text-rose-600 hover:bg-rose-50 w-full transition-colors"
                   >
                     <LogOut className="w-5 h-5" />

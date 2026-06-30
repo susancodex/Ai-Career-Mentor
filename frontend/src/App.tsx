@@ -3,6 +3,8 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Login } from './pages/auth/Login';
 import { Register } from './pages/auth/Register';
+import { ForgotPassword } from './pages/auth/ForgotPassword';
+import { ResetPassword } from './pages/auth/ResetPassword';
 import { Dashboard } from './pages/dashboard/Dashboard';
 import { ResumePage } from './pages/resume/ResumePage';
 import { CareersPage } from './pages/careers/CareersPage';
@@ -10,6 +12,7 @@ import { JobsPage } from './pages/jobs/JobsPage';
 import { InterviewPage } from './pages/interview/InterviewPage';
 import { LearningPage } from './pages/learning/LearningPage';
 import { ChatPage } from './pages/chat/ChatPage';
+import { ProfilePage } from './pages/profile/ProfilePage';
 import { ProtectedRoute } from './components/layout/ProtectedRoute';
 import { useAuthStore } from './store/authStore';
 import { silentRefresh } from './api/auth';
@@ -36,7 +39,6 @@ function AuthBootstrap({ children }: { children: React.ReactNode }) {
         }
       });
     }
-    // Intentionally runs once on mount — Zustand store refs are stable
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -50,64 +52,22 @@ function App() {
       <BrowserRouter basename={basename}>
         <AuthBootstrap>
           <Routes>
+            {/* Public auth routes */}
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
-            <Route
-              path="/dashboard"
-              element={
-                <ProtectedRoute>
-                  <Dashboard />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/resume"
-              element={
-                <ProtectedRoute>
-                  <ResumePage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/careers"
-              element={
-                <ProtectedRoute>
-                  <CareersPage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/jobs"
-              element={
-                <ProtectedRoute>
-                  <JobsPage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/interview"
-              element={
-                <ProtectedRoute>
-                  <InterviewPage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/learning"
-              element={
-                <ProtectedRoute>
-                  <LearningPage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/chat"
-              element={
-                <ProtectedRoute>
-                  <ChatPage />
-                </ProtectedRoute>
-              }
-            />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
+
+            {/* Protected routes — ProtectedRoute already wraps with DashboardLayout */}
+            <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+            <Route path="/resume" element={<ProtectedRoute><ResumePage /></ProtectedRoute>} />
+            <Route path="/careers" element={<ProtectedRoute><CareersPage /></ProtectedRoute>} />
+            <Route path="/jobs" element={<ProtectedRoute><JobsPage /></ProtectedRoute>} />
+            <Route path="/interview" element={<ProtectedRoute><InterviewPage /></ProtectedRoute>} />
+            <Route path="/learning" element={<ProtectedRoute><LearningPage /></ProtectedRoute>} />
+            <Route path="/chat" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
+            <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
+
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="*" element={<Navigate to="/login" replace />} />
           </Routes>

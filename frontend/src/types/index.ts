@@ -2,6 +2,10 @@ export interface User {
   id: string;
   email: string;
   full_name: string;
+  first_name?: string;
+  last_name?: string;
+  created_at?: string;
+  profile?: Profile;
 }
 
 export interface Tokens {
@@ -12,12 +16,26 @@ export interface Tokens {
 export interface Profile {
   id: string;
   email: string;
-  full_name: string;
-  current_role?: string;
-  years_experience?: number;
-  target_roles?: string[];
-  location?: string;
+  first_name?: string;
+  last_name?: string;
+  avatar_url?: string;
+  avatar_public_id?: string;
   bio?: string;
+  phone?: string;
+  location?: string;
+  linkedin_url?: string;
+  website_url?: string;
+  job_title?: string;
+  company?: string;
+  years_experience?: number;
+  preferred_roles?: string[];
+  skills?: string[];
+  email_notifications_enabled?: boolean;
+  theme_preference?: 'light' | 'dark' | 'system';
+  current_role?: string;
+  target_roles?: string[];
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface Resume {

@@ -131,12 +131,17 @@ export function Login() {
             </form>
           </div>
 
-          <p className="mt-6 text-sm text-center text-slate-500">
-            Don't have an account?{' '}
-            <Link to="/register" className="font-semibold text-teal-700 hover:text-teal-600 transition-colors">
-              Create one for free
+          <div className="mt-5 flex flex-col items-center gap-3">
+            <Link to="/forgot-password" className="text-sm font-medium text-slate-500 hover:text-teal-700 transition-colors">
+              Forgot your password?
             </Link>
-          </p>
+            <p className="text-sm text-slate-500">
+              Don't have an account?{' '}
+              <Link to="/register" className="font-semibold text-teal-700 hover:text-teal-600 transition-colors">
+                Create one for free
+              </Link>
+            </p>
+          </div>
         </motion.div>
       </div>
     </div>

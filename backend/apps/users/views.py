@@ -9,8 +9,8 @@ from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from .serializers import (
-    RegisterSerializer, UserSerializer, MeSerializer, ProfileUpdateSerializer,
-    AvatarUploadSerializer
+    RegisterSerializer, UserSerializer, MeSerializer, ProfileSerializer,
+    ProfileUpdateSerializer, AvatarUploadSerializer
 )
 from .models import PasswordResetToken
 
@@ -281,7 +281,7 @@ class MeView(APIView):
 
     def patch(self, request):
         profile = request.user.profile
-        serializer = ProfileUpdateSerializer(profile, data=request.data, partial=True)
+        serializer = ProfileSerializer(profile, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(MeSerializer(request.user).data)
