@@ -93,5 +93,6 @@ def analyze_resume(self, resume_id: str):
     except Exception as exc:
         logger.exception("Resume analysis failed for %s", resume_id)
         resume.status = Resume.Status.FAILED
-        resume.save(update_fields=["status", "updated_at"])
+        resume.error_message = str(exc)[:500]  # Limit to 500 chars
+        resume.save(update_fields=["status", "error_message", "updated_at"])
         raise self.retry(exc=exc)

@@ -20,6 +20,7 @@ class AsyncJob(models.Model):
     celery_task_id = models.CharField(max_length=255, unique=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     result = models.JSONField(null=True, blank=True)
+    error_message = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -117,6 +117,16 @@ services:
       DJANGO_SETTINGS_MODULE: config.settings.dev
       AI_SERVICE_URL: http://ai_service:8001
       DJANGO_ALLOW_ASYNC_UNSAFE: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ai_service:
+        condition: service_healthy
+    networks: [internal]
+
+  frontend:
     build:
       context: ../frontend
       dockerfile: Dockerfile

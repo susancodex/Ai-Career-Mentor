@@ -80,7 +80,14 @@ class AsyncJobStatusView(APIView):
             if result.state == "SUCCESS":
                 return Response({"status": "done", "result": result.result})
             elif result.state in ("FAILURE", "REVOKED"):
-                return Response({"status": "failed", "result": None})
+                # Check if we have a stored error message
+                try:
+                    job = AsyncJob.objects.filter(celery_task_id=job_id).first()
+                    if job and job.error_message:
+                        return Response({"status": "failed", "error": job.error_message})
+                except Exception:
+                    pass
+                return Response({"status": "failed", "error": "Processing failed. Try again."})
         except Exception:
             pass
         return Response({"status": "pending", "result": None})

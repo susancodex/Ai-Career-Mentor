@@ -3,6 +3,7 @@ from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, Permis
 from django.db import models
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+from django.utils import timezone
 
 
 class UserManager(BaseUserManager):
@@ -76,3 +77,21 @@ class Profile(models.Model):
 def create_user_profile(sender, instance, created, **kwargs):
     if created:
         Profile.objects.get_or_create(user=instance)
+
+
+class PasswordResetToken(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="password_reset_tokens")
+    token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    used = models.BooleanField(default=False)
+
+    class Meta:
+        indexes = [models.Index(fields=["token"]), models.Index(fields=["user", "used"])]
+
+    def is_valid(self):
+        from django.conf import settings
+        expiry_seconds = getattr(settings, "PASSWORD_RESET_TIMEOUT_SECONDS", 3600)
+        return (
+            not self.used and
+            (timezone.now() - self.created_at).total_seconds() < expiry_seconds
+        )

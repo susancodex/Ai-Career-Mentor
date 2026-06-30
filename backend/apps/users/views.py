@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.mail import send_mail
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -11,6 +12,7 @@ from .serializers import (
     RegisterSerializer, UserSerializer, MeSerializer, ProfileUpdateSerializer,
     AvatarUploadSerializer
 )
+from .models import PasswordResetToken
 
 User = get_user_model()
 
@@ -160,9 +162,42 @@ class ForgotPasswordView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        email = request.data.get("email", "")
-        # Always return success to prevent user enumeration
-        # In production, this would send an email if the user exists
+        email = request.data.get("email", "").strip()
+        
+        try:
+            user = User.objects.get(email=email)
+            # Create password reset token
+            reset_token = PasswordResetToken.objects.create(user=user)
+            
+            # Build reset URL
+            frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:5173")
+            reset_url = f"{frontend_url}/reset-password?token={reset_token.token}"
+            
+            # Send email
+            subject = "Reset your password"
+            message = f"""
+            Hello {user.full_name or user.email},
+            
+            You requested a password reset. Click the link below to reset your password:
+            
+            {reset_url}
+            
+            This link will expire in 1 hour.
+            
+            If you didn't request this, you can safely ignore this email.
+            """
+            
+            send_mail(
+                subject,
+                message,
+                getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@localhost"),
+                [email],
+                fail_silently=True,
+            )
+        except User.DoesNotExist:
+            # User doesn't exist - still return success to prevent enumeration
+            pass
+        
         return Response({"message": "If an account with this email exists, a password reset link has been sent."})
 
 
@@ -174,22 +209,37 @@ class ResetPasswordView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        token = request.data.get("token", "")
+        token_str = request.data.get("token", "")
         new_password = request.data.get("new_password", "")
-        
-        if not token or not new_password:
+
+        if not token_str or not new_password:
             return Response(
                 {"error": "Token and new password are required."},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        # TODO: Implement token validation and password reset
-        # This would typically involve:
-        # 1. Validate the token (check expiry, single-use)
-        # 2. Get the user from the token
-        # 3. Set the new password
-        # 4. Invalidate the token
-        
+
+        try:
+            token = PasswordResetToken.objects.select_related("user").get(token=token_str)
+        except PasswordResetToken.DoesNotExist:
+            return Response(
+                {"error": "Invalid or expired token."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not token.is_valid():
+            return Response(
+                {"error": "Invalid or expired token."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Set new password
+        token.user.set_password(new_password)
+        token.user.save()
+
+        # Invalidate token
+        token.used = True
+        token.save(update_fields=["used"])
+
         return Response({"message": "Password reset successful."})
 
 

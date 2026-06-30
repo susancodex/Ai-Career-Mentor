@@ -20,6 +20,7 @@ class Resume(models.Model):
     file_type = models.CharField(max_length=10, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.UPLOADED)
     raw_text = models.TextField(blank=True)
+    error_message = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
