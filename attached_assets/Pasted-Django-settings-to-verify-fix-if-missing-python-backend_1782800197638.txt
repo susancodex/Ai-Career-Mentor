@@ -1,0 +1,242 @@
+Django settings to verify (fix if missing):
+
+python# backend/config/settings/base.py
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=["http://localhost:5173", "http://localhost"])
+CORS_EXPOSE_HEADERS = ["Content-Type", "X-CSRFToken"]
+USE_X_FORWARDED_HOST = True
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+DJANGO_ALLOW_ASYNC_UNSAFE = env.bool("DJANGO_ALLOW_ASYNC_UNSAFE", default=False)
+
+Frontend token storage (inspect and fix):
+
+typescript// CORRECT — token lives only in memory, never localStorage/sessionStorage
+let _accessToken: string | null = null;
+export const setToken = (t: string) => { _accessToken = t; };
+export const getToken = () => _accessToken;
+export const clearToken = () => { _accessToken = null; };
+
+Run:
+
+bashgrep -rn "localStorage\|sessionStorage" frontend/src/ | grep -i "token\|access\|refresh"
+
+Any match is a security bug. Fix it by moving to the in-memory pattern above.
+
+Axios refresh interceptor — must use a queue, not a flag:
+
+typescript// frontend/src/lib/api.ts
+let isRefreshing = false;
+let refreshQueue: Array<(token: string) => void> = [];
+
+api.interceptors.response.use(
+  (res) => res,
+  async (error) => {
+    const original = error.config;
+    if (error.response?.status === 401 && !original._retry) {
+      original._retry = true;
+      if (isRefreshing) {
+        return new Promise((resolve) => {
+          refreshQueue.push((token) => {
+            original.headers.Authorization = `Bearer ${token}`;
+            resolve(api(original));
+          });
+        });
+      }
+      isRefreshing = true;
+      try {
+        const { data } = await api.post("/auth/refresh/");
+        setToken(data.access);
+        original.headers.Authorization = `Bearer ${data.access}`;
+        refreshQueue.forEach((cb) => cb(data.access));
+        refreshQueue = [];
+        return api(original);
+      } finally {
+        isRefreshing = false;
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
+Verification:
+
+bash# 1. Register a new user
+curl -s -c cookies.txt -X POST http://localhost/api/v1/auth/register/ \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com","password":"TestPass123!","first_name":"Test","last_name":"User"}' \
+  | python3 -m json.tool
+
+# 2. Confirm cookie was set
+grep refresh_token cookies.txt
+
+# 3. Refresh the token
+curl -s -b cookies.txt -X POST http://localhost/api/v1/auth/refresh/ | python3 -m json.tool
+
+# 4. Logout
+curl -s -b cookies.txt -X POST http://localhost/api/v1/auth/logout/ -w "%{http_code}"
+
+# 5. Confirm token no longer works
+curl -s -b cookies.txt -X POST http://localhost/api/v1/auth/refresh/ -w "%{http_code}"
+# Must return 401
+
+# 6. Test forgot password
+curl -s -X POST http://localhost/api/v1/auth/password/forgot/ \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com"}' -w "%{http_code}"
+# Must return 200 regardless of whether email exists
+
+STOP — all 6 verification steps must pass before continuing.
+
+
+2.2 Profile Section (Complete — Inspect and Fix Every Item)
+
+The profile section is a first-class feature, not an afterthought. Every item below
+must work end-to-end.
+
+2.2.1 Backend — Profile API
+
+python# backend/apps/users/models.py
+# Ensure UserProfile model has ALL of these fields
+class UserProfile(models.Model):
+    user         = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
+    avatar_url   = models.URLField(blank=True, default="")  # Cloudinary URL
+    avatar_public_id = models.CharField(max_length=255, blank=True, default="")
+    bio          = models.TextField(blank=True, default="")
+    phone        = models.CharField(max_length=20, blank=True, default="")
+    location     = models.CharField(max_length=100, blank=True, default="")
+    linkedin_url = models.URLField(blank=True, default="")
+    website_url  = models.URLField(blank=True, default="")
+    job_title    = models.CharField(max_length=100, blank=True, default="")
+    company      = models.CharField(max_length=100, blank=True, default="")
+    years_experience = models.PositiveSmallIntegerField(null=True, blank=True)
+    preferred_roles  = models.JSONField(default=list, blank=True)  # e.g. ["backend", "ml"]
+    skills       = models.JSONField(default=list, blank=True)
+    email_notifications_enabled = models.BooleanField(default=True)
+    theme_preference = models.CharField(
+        max_length=10,
+        choices=[("light", "Light"), ("dark", "Dark"), ("system", "System")],
+        default="system",
+    )
+    created_at   = models.DateTimeField(auto_now_add=True)
+    updated_at   = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["user"])]
+
+# Signal to auto-create profile on user creation
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+
+@receiver(post_save, sender=User)
+def create_user_profile(sender, instance, created, **kwargs):
+    if created:
+        UserProfile.objects.get_or_create(user=instance)
+
+python# backend/apps/users/serializers.py
+class UserProfileSerializer(serializers.ModelSerializer):
+    email    = serializers.EmailField(source="user.email", read_only=True)
+    first_name = serializers.CharField(source="user.first_name")
+    last_name  = serializers.CharField(source="user.last_name")
+
+    class Meta:
+        model  = UserProfile
+        fields = [
+            "id", "email", "first_name", "last_name", "avatar_url",
+            "bio", "phone", "location", "linkedin_url", "website_url",
+            "job_title", "company", "years_experience", "preferred_roles",
+            "skills", "email_notifications_enabled", "theme_preference",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "email", "created_at", "updated_at", "avatar_url"]
+
+    def update(self, instance, validated_data):
+        user_data = validated_data.pop("user", {})
+        if user_data:
+            user = instance.user
+            for attr, value in user_data.items():
+                setattr(user, attr, value)
+            user.save(update_fields=list(user_data.keys()))
+        return super().update(instance, validated_data)
+
+class AvatarUploadSerializer(serializers.Serializer):
+    cloudinary_url       = serializers.URLField()
+    cloudinary_public_id = serializers.CharField(max_length=255)
+
+python# backend/apps/users/views.py — Profile endpoints
+class ProfileView(generics.RetrieveUpdateAPIView):
+    serializer_class   = UserProfileSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        profile, _ = UserProfile.objects.get_or_create(user=self.request.user)
+        return profile
+
+class AvatarUploadView(APIView):
+    """
+    Accepts a Cloudinary URL already uploaded by the frontend.
+    Validates the URL belongs to our Cloudinary cloud before saving.
+    If the user had a previous avatar, deletes it from Cloudinary.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = AvatarUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        cloud_name = settings.CLOUDINARY_CLOUD_NAME
+        url        = serializer.validated_data["cloudinary_url"]
+        public_id  = serializer.validated_data["cloudinary_public_id"]
+
+        # Validate URL belongs to our cloud
+        if f"res.cloudinary.com/{cloud_name}" not in url:
+            return Response({"error": "Invalid Cloudinary URL."}, status=400)
+
+        profile = request.user.profile
+
+        # Delete previous avatar from Cloudinary if one exists
+        if profile.avatar_public_id:
+            try:
+                import cloudinary.uploader
+                cloudinary.uploader.destroy(profile.avatar_public_id)
+            except Exception:
+                pass  # Don't fail the upload if cleanup fails
+
+        profile.avatar_url       = url
+        profile.avatar_public_id = public_id
+        profile.save(update_fields=["avatar_url", "avatar_public_id", "updated_at"])
+        return Response({"avatar_url": url})
+
+class DeleteAccountView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request):
+        password = request.data.get("password", "")
+        if not request.user.check_password(password):
+            return Response({"error": "Incorrect password."}, status=400)
+
+        # Clean up Cloudinary avatar if exists
+        if hasattr(request.user, "profile") and request.user.profile.avatar_public_id:
+            try:
+                import cloudinary.uploader
+                cloudinary.uploader.destroy(request.user.profile.avatar_public_id)
+            except Exception:
+                pass
+
+        request.user.delete()
+        response = Response(status=204)
+        response.delete_cookie("refresh_token")
+        return response
+
+python# backend/apps/users/urls.py — register these routes
+urlpatterns = [
+    path("auth/register/",             RegisterView.as_view(),          name="register"),
+    path("auth/login/",                LoginView.as_view(),             name="login"),
+    path("auth/logout/",               LogoutView.as_view(),            name="logout"),
+    path("auth/refresh/",              TokenRefreshView.as_view(),      name="token-refresh"),
+    path("auth/password/forgot/",      ForgotPasswordView.as_view(),    name="password-forgot"),
+    path("auth/password/reset/",       ResetPasswordView.as_view(),     name="password-reset"),
+    path("auth/password/change/",      ChangePasswordView.as_view(),    name="password-change"),
+    path("me/",                        ProfileView.as_view(),           name="profile"),
+    path("me/avatar/",                 AvatarUploadView.as_view(),      name="avatar-upload"),
+    path("me/delete/",                 DeleteAccountView.as_view(),     name="account-delete"),
+]
