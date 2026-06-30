@@ -1,0 +1,117 @@
+# Signal to auto-create profile on user creation
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+
+@receiver(post_save, sender=User)
+def create_user_profile(sender, instance, created, **kwargs):
+    if created:
+        UserProfile.objects.get_or_create(user=instance)
+
+python# backend/apps/users/serializers.py
+class UserProfileSerializer(serializers.ModelSerializer):
+    email    = serializers.EmailField(source="user.email", read_only=True)
+    first_name = serializers.CharField(source="user.first_name")
+    last_name  = serializers.CharField(source="user.last_name")
+
+    class Meta:
+        model  = UserProfile
+        fields = [
+            "id", "email", "first_name", "last_name", "avatar_url",
+            "bio", "phone", "location", "linkedin_url", "website_url",
+            "job_title", "company", "years_experience", "preferred_roles",
+            "skills", "email_notifications_enabled", "theme_preference",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "email", "created_at", "updated_at", "avatar_url"]
+
+    def update(self, instance, validated_data):
+        user_data = validated_data.pop("user", {})
+        if user_data:
+            user = instance.user
+            for attr, value in user_data.items():
+                setattr(user, attr, value)
+            user.save(update_fields=list(user_data.keys()))
+        return super().update(instance, validated_data)
+
+class AvatarUploadSerializer(serializers.Serializer):
+    cloudinary_url       = serializers.URLField()
+    cloudinary_public_id = serializers.CharField(max_length=255)
+
+python# backend/apps/users/views.py — Profile endpoints
+class ProfileView(generics.RetrieveUpdateAPIView):
+    serializer_class   = UserProfileSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        profile, _ = UserProfile.objects.get_or_create(user=self.request.user)
+        return profile
+
+class AvatarUploadView(APIView):
+    """
+    Accepts a Cloudinary URL already uploaded by the frontend.
+    Validates the URL belongs to our Cloudinary cloud before saving.
+    If the user had a previous avatar, deletes it from Cloudinary.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = AvatarUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        cloud_name = settings.CLOUDINARY_CLOUD_NAME
+        url        = serializer.validated_data["cloudinary_url"]
+        public_id  = serializer.validated_data["cloudinary_public_id"]
+
+        # Validate URL belongs to our cloud
+        if f"res.cloudinary.com/{cloud_name}" not in url:
+            return Response({"error": "Invalid Cloudinary URL."}, status=400)
+
+        profile = request.user.profile
+
+        # Delete previous avatar from Cloudinary if one exists
+        if profile.avatar_public_id:
+            try:
+                import cloudinary.uploader
+                cloudinary.uploader.destroy(profile.avatar_public_id)
+            except Exception:
+                pass  # Don't fail the upload if cleanup fails
+
+        profile.avatar_url       = url
+        profile.avatar_public_id = public_id
+        profile.save(update_fields=["avatar_url", "avatar_public_id", "updated_at"])
+        return Response({"avatar_url": url})
+
+class DeleteAccountView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request):
+        password = request.data.get("password", "")
+        if not request.user.check_password(password):
+            return Response({"error": "Incorrect password."}, status=400)
+
+        # Clean up Cloudinary avatar if exists
+        if hasattr(request.user, "profile") and request.user.profile.avatar_public_id:
+            try:
+                import cloudinary.uploader
+                cloudinary.uploader.destroy(request.user.profile.avatar_public_id)
+            except Exception:
+                pass
+
+        request.user.delete()
+        response = Response(status=204)
+        response.delete_cookie("refresh_token")
+        return response
+
+python# backend/apps/users/urls.py — register these routes
+urlpatterns = [
+    path("auth/register/",             RegisterView.as_view(),          name="register"),
+    path("auth/login/",                LoginView.as_view(),             name="login"),
+    path("auth/logout/",               LogoutView.as_view(),            name="logout"),
+    path("auth/refresh/",              TokenRefreshView.as_view(),      name="token-refresh"),
+    path("auth/password/forgot/",      ForgotPasswordView.as_view(),    name="password-forgot"),
+    path("auth/password/reset/",       ResetPasswordView.as_view(),     name="password-reset"),
+    path("auth/password/change/",      ChangePasswordView.as_view(),    name="password-change"),
+    path("me/",                        ProfileView.as_view(),           name="profile"),
+    path("me/avatar/",                 AvatarUploadView.as_view(),      name="avatar-upload"),
+    path("me/delete/",                 DeleteAccountView.as_view(),     name="account-delete"),
+]
