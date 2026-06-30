@@ -1,6 +1,7 @@
 import uuid
 from rest_framework import generics, status
 from rest_framework.exceptions import NotFound
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -12,8 +13,15 @@ from .serializers import ResumeSerializer, ResumeCreateSerializer, ResumeAnalysi
 from .tasks import analyze_resume
 
 
+class ResumePagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
 class ResumeListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAuthenticated]
+    pagination_class = ResumePagination
 
     def get_serializer_class(self):
         if self.request.method == "POST":
@@ -27,12 +35,11 @@ class ResumeListCreateView(generics.ListCreateAPIView):
         serializer = ResumeCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         resume = serializer.save(user=request.user)
-        # Enqueue async analysis — returns 201 immediately; safe_delay handles missing broker
         safe_delay(analyze_resume, str(resume.id))
         return Response(ResumeSerializer(resume).data, status=status.HTTP_201_CREATED)
 
 
-class ResumeDetailView(generics.RetrieveAPIView):
+class ResumeDetailView(generics.RetrieveDestroyAPIView):
     permission_classes = [IsAuthenticated, IsOwner]
     serializer_class = ResumeSerializer
 
@@ -45,6 +52,18 @@ class ResumeDetailView(generics.RetrieveAPIView):
         except (Resume.DoesNotExist, ValueError):
             raise NotFound("Resume not found.")
         return resume
+
+    def destroy(self, request, *args, **kwargs):
+        resume = self.get_object()
+        # Delete from Cloudinary before removing DB record
+        if resume.cloudinary_public_id:
+            try:
+                import cloudinary.uploader
+                cloudinary.uploader.destroy(resume.cloudinary_public_id, resource_type="raw")
+            except Exception:
+                pass  # Don't block deletion if Cloudinary cleanup fails
+        resume.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ResumeAnalysisView(APIView):

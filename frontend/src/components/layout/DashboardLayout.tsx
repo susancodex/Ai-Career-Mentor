@@ -7,24 +7,24 @@ import {
   BookOpen,
   GraduationCap,
   LogOut,
-  Menu,
-  X,
   Sparkles,
   Settings,
 } from 'lucide-react';
-import { useState, useEffect } from 'react';
-import { useAuth } from '../../hooks/useAuth';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useEffect } from 'react';
+import { useLogout } from '../../hooks/useLogout';
+import { useAuthStore } from '../../store/authStore';
+import { motion } from 'framer-motion';
+import { BottomNav } from './BottomNav';
 import type { Profile } from '../../types';
 
 const navItems = [
-  { to: '/dashboard', label: 'Overview', icon: Compass },
-  { to: '/resume', label: 'Resume Profile', icon: FileText },
-  { to: '/careers', label: 'Path Explorer', icon: GraduationCap },
-  { to: '/jobs', label: 'Job Matches', icon: Briefcase },
+  { to: '/dashboard', label: 'Overview',       icon: Compass       },
+  { to: '/resume',    label: 'Resume Profile', icon: FileText      },
+  { to: '/careers',   label: 'Path Explorer',  icon: GraduationCap },
+  { to: '/jobs',      label: 'Job Matches',    icon: Briefcase     },
   { to: '/interview', label: 'Interview Prep', icon: MessageSquare },
-  { to: '/learning', label: 'Skill Builder', icon: BookOpen },
-  { to: '/chat', label: 'AI Coach', icon: Sparkles },
+  { to: '/learning',  label: 'Skill Builder',  icon: BookOpen      },
+  { to: '/chat',      label: 'AI Coach',       icon: Sparkles      },
 ];
 
 function UserAvatar({ profile, fullName }: { profile?: Profile; fullName?: string }) {
@@ -52,12 +52,12 @@ function UserAvatar({ profile, fullName }: { profile?: Profile; fullName?: strin
 }
 
 export function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const [mobileOpen, setMobileOpen] = useState(false);
-  const { user, logout } = useAuth();
+  const logout = useLogout();
+  const { user } = useAuthStore();
   const location = useLocation();
 
   useEffect(() => {
-    setMobileOpen(false);
+    // close any open drawers on route change (no-op now — kept for future use)
   }, [location.pathname]);
 
   const profile = user?.profile;
@@ -105,7 +105,6 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
         </nav>
 
         <div className="p-4 border-t border-sidebar-border bg-sidebar-bg/50 space-y-2">
-          {/* Profile link */}
           <NavLink
             to="/profile"
             className={({ isActive }) =>
@@ -120,7 +119,7 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
               <>
                 <UserAvatar profile={profile} fullName={user?.full_name} />
                 <div className="flex-1 min-w-0">
-                  <p className={`text-sm font-bold truncate ${isActive ? 'text-white' : 'text-white'}`}>
+                  <p className="text-sm font-bold truncate text-white">
                     {user?.full_name || 'User'}
                   </p>
                   <p className="text-xs text-slate-400 truncate">{user?.email}</p>
@@ -130,7 +129,6 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
             )}
           </NavLink>
 
-          {/* Sign out */}
           <button
             onClick={() => logout()}
             className="flex items-center gap-2 w-full px-3 py-2 text-sm font-medium text-slate-400 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
@@ -141,77 +139,19 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      {/* Mobile header */}
-      <div className="lg:hidden fixed top-0 left-0 right-0 z-50 bg-white/80 backdrop-blur-md border-b border-slate-200">
-        <div className="flex items-center justify-between px-4 py-3">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-md bg-primary flex items-center justify-center">
-              <Sparkles className="w-4 h-4 text-white" />
-            </div>
-            <h1 className="text-base font-bold text-slate-900 tracking-tight">Career Mentor</h1>
+      {/* Mobile top header — brand only; navigation is via BottomNav */}
+      <div className="lg:hidden fixed top-0 left-0 right-0 z-50 bg-white/90 backdrop-blur-md border-b border-slate-200">
+        <div className="flex items-center px-4 py-3 gap-3">
+          <div className="w-7 h-7 rounded-md bg-primary flex items-center justify-center">
+            <Sparkles className="w-4 h-4 text-white" />
           </div>
-          <button
-            onClick={() => setMobileOpen(!mobileOpen)}
-            className="p-2 -mr-2 rounded-lg text-slate-600 hover:bg-slate-100 transition-colors"
-          >
-            {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-          </button>
+          <h1 className="text-base font-bold text-slate-900 tracking-tight">Career Mentor</h1>
         </div>
-
-        <AnimatePresence>
-          {mobileOpen && (
-            <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              className="overflow-hidden bg-white border-t border-slate-100 shadow-xl"
-            >
-              <nav className="px-4 py-4 space-y-1">
-                {navItems.map((item) => (
-                  <NavLink
-                    key={item.to}
-                    to={item.to}
-                    className={({ isActive }) =>
-                      `flex items-center gap-3 px-3 py-3 rounded-lg text-sm font-semibold transition-colors ${
-                        isActive
-                          ? 'bg-slate-50 text-primary'
-                          : 'text-slate-600 hover:bg-slate-50'
-                      }`
-                    }
-                  >
-                    <item.icon className="w-5 h-5" />
-                    {item.label}
-                  </NavLink>
-                ))}
-                <NavLink
-                  to="/profile"
-                  className={({ isActive }) =>
-                    `flex items-center gap-3 px-3 py-3 rounded-lg text-sm font-semibold transition-colors ${
-                      isActive ? 'bg-slate-50 text-primary' : 'text-slate-600 hover:bg-slate-50'
-                    }`
-                  }
-                >
-                  <Settings className="w-5 h-5" />
-                  Profile & Settings
-                </NavLink>
-                <div className="pt-4 mt-2 border-t border-slate-100">
-                  <button
-                    onClick={() => logout()}
-                    className="flex items-center gap-3 px-3 py-3 rounded-lg text-sm font-semibold text-rose-600 hover:bg-rose-50 w-full transition-colors"
-                  >
-                    <LogOut className="w-5 h-5" />
-                    Sign out
-                  </button>
-                </div>
-              </nav>
-            </motion.div>
-          )}
-        </AnimatePresence>
       </div>
 
       {/* Main content */}
-      <main className="flex-1 lg:ml-[280px] pt-16 lg:pt-0 min-h-screen relative">
-        <div className="absolute inset-0 pointer-events-none bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.015] mix-blend-overlay"></div>
+      <main className="flex-1 lg:ml-[280px] pt-14 lg:pt-0 pb-20 lg:pb-0 min-h-screen relative">
+        <div className="absolute inset-0 pointer-events-none bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.015] mix-blend-overlay" />
         <div className="max-w-5xl mx-auto p-4 md:p-8 lg:p-10 relative z-10">
           <motion.div
             initial={{ opacity: 0, y: 10 }}
@@ -222,6 +162,9 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
           </motion.div>
         </div>
       </main>
+
+      {/* Mobile bottom navigation — hidden on desktop */}
+      <BottomNav />
     </div>
   );
 }

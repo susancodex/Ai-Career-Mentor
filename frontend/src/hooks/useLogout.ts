@@ -1,27 +1,22 @@
-import { useMutation } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { logout as apiLogout } from '../api/auth';
+import { useQueryClient } from '@tanstack/react-query';
+import { apiClient } from '../api/client';
 import { useAuthStore } from '../store/authStore';
 
 export function useLogout() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { logout: clearAuth } = useAuthStore();
-
-  const logoutMutation = useMutation({
-    mutationFn: apiLogout,
-    onSuccess: () => {
-      clearAuth();
-      navigate('/login', { replace: true });
-    },
-  });
 
   return async function logout() {
     try {
-      await logoutMutation.mutateAsync();
+      await apiClient.post('/auth/logout/');
     } catch {
       // Logout must always succeed from the user's perspective,
-      // even if the server call fails
+      // even if the server call fails (expired token, network error, etc.)
+    } finally {
       clearAuth();
+      queryClient.clear();
       navigate('/login', { replace: true });
     }
   };

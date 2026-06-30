@@ -1,0 +1,313 @@
+Desktop (≥ 1024px):
+  - Left sidebar navigation (240px fixed)
+  - Main content area (flex-1)
+  - Profile settings in right panel
+
+Verification:
+
+bash# 1. Fetch profile (must return full shape)
+TOKEN="<paste access token from login>"
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost/api/v1/me/ | python3 -m json.tool
+
+# 2. Update profile
+curl -s -X PATCH http://localhost/api/v1/me/ \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"first_name":"Jane","bio":"Senior engineer","location":"San Francisco"}' \
+  | python3 -m json.tool
+
+# 3. Trigger forgot password
+curl -s -X POST http://localhost/api/v1/auth/password/forgot/ \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com"}' -w "\nHTTP %{http_code}\n"
+# Must return HTTP 200 and NOT say "email not found"
+
+STOP — profile CRUD, avatar upload endpoint, forgot-password, and logout must all
+return expected responses before continuing.
+
+
+2.3 Resume Upload and Parsing
+
+Upload flow:
+1. User drags file → validate: type (.pdf, .docx only), size (≤ 5 MB)
+2. Upload directly to Cloudinary (unsigned preset restricted to pdf/docx in dashboard)
+3. POST /api/v1/resumes/ { cloudinary_url, cloudinary_public_id, original_filename }
+4. → 201 { id, status: "uploaded" }
+5. Celery task fires → AI service parses resume → updates status to "parsed"
+6. Frontend polls GET /api/v1/resumes/{id}/ every 3 s → shows status
+7. When status = "parsed", fetch GET /api/v1/resumes/{id}/analysis/
+8. Show analysis with skills, experience, suggested improvements
+
+Inspect and fix:
+
+
+File type validation must be on both frontend (UX) and backend (security)
+If Celery task fails, status must become "failed" with an error_message — not
+stay stuck on "processing" forever
+Resume analysis endpoint must return 404 (not 500) if analysis is not yet ready
+Old resumes are listed at GET /api/v1/resumes/ with pagination (20 per page)
+Deleting a resume must also delete it from Cloudinary
+
+
+Verification:
+
+bash# Upload a real PDF and watch it parse
+curl -s -X POST http://localhost/api/v1/resumes/ \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"cloudinary_url\":\"https://res.cloudinary.com/YOURCLOUD/raw/upload/v1/test.pdf\",
+       \"cloudinary_public_id\":\"test\",
+       \"original_filename\":\"my_resume.pdf\"}" \
+  | python3 -m json.tool
+
+# Poll until status changes
+for i in {1..20}; do
+  STATUS=$(curl -s -H "Authorization: Bearer $TOKEN" http://localhost/api/v1/resumes/1/ \
+           | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")
+  echo "[$i] Status: $STATUS"
+  [ "$STATUS" != "uploaded" ] && [ "$STATUS" != "processing" ] && break
+  sleep 3
+done
+
+STOP — resume must reach "parsed" or "failed" within 60 s. "Stuck on processing"
+means the Celery task or AI service call is broken — fix it before continuing.
+
+
+2.4 AI Chat — Streaming (Most Critical Feature)
+
+The full call chain (read it twice):
+
+Browser EventSource
+  → POST /api/v1/chat/sessions/{id}/messages/        [Nginx: no buffering]
+      → Django view: persists message, fires Celery task, subscribes to Redis
+          → Celery: signs HMAC, calls POST http://ai_service:8001/chat/stream/
+              → FastAPI: verifies HMAC, invokes LangGraph → Gemini
+              → Streams SSE tokens back to Celery
+          → Celery: publishes each token to Redis channel
+      → Django SSE view: listens on Redis, yields tokens to browser
+  → Browser: renders tokens progressively, word by word
+
+HMAC signing (inspect and fix):
+
+python# backend/apps/chat/tasks.py
+import hashlib, hmac, time, httpx, json, redis
+from django.conf import settings
+
+def _hmac_headers(body: bytes) -> dict:
+    timestamp = str(int(time.time()))
+    sig = hmac.new(
+        settings.AI_SERVICE_SHARED_SECRET.encode(),
+        msg=f"{timestamp}.".encode() + body,
+        digestmod=hashlib.sha256,
+    ).hexdigest()
+    # NEVER log these headers
+    return {"X-Timestamp": timestamp, "X-Signature": sig, "Content-Type": "application/json"}
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=2)
+def stream_chat_message(self, session_id: str, message: str, user_id: int):
+    r = redis.from_url(settings.REDIS_URL)
+    channel = f"chat:stream:{session_id}"
+    payload = json.dumps({"session_id": session_id, "message": message, "user_id": user_id}).encode()
+    headers = _hmac_headers(payload)
+    try:
+        with httpx.stream("POST", f"{settings.AI_SERVICE_URL}/chat/stream/",
+                          content=payload, headers=headers, timeout=300) as resp:
+            resp.raise_for_status()
+            for line in resp.iter_lines():
+                if line.startswith("data:"):
+                    r.publish(channel, line)
+        r.publish(channel, 'data: {"done":true}')
+    except Exception as exc:
+        r.publish(channel, f'data: {{"error":"{type(exc).__name__}"}}')
+        raise self.retry(exc=exc)
+
+Django SSE view (inspect and fix):
+
+python# backend/apps/chat/views.py
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def send_message(request, session_id):
+    content = request.data.get("content", "").strip()
+    if not content:
+        return Response({"error": "content is required"}, status=400)
+    if len(content) > 4000:
+        return Response({"error": "Message too long (max 4000 characters)."}, status=400)
+
+    session = get_object_or_404(ChatSession, id=session_id, user=request.user)
+    Message.objects.create(session=session, role="user", content=content)
+    stream_chat_message.delay(str(session_id), content, request.user.id)
+
+    r = redis.from_url(settings.REDIS_URL)
+    ps = r.pubsub()
+    ps.subscribe(f"chat:stream:{session_id}")
+
+    def event_stream():
+        try:
+            for msg in ps.listen():
+                if msg["type"] == "message":
+                    data = msg["data"].decode()
+                    yield f"{data}\n\n"
+                    if '"done"' in data or '"error"' in data:
+                        break
+        finally:
+            ps.unsubscribe()
+            ps.close()
+
+    response = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
+    response["Cache-Control"] = "no-cache"
+    response["X-Accel-Buffering"] = "no"
+    return response
+
+FastAPI HMAC middleware (inspect and fix):
+
+python# ai_service/middleware/hmac_auth.py
+import hashlib, hmac, os, time
+from fastapi import Request, HTTPException
+
+_SECRET = os.environ.get("AI_SERVICE_SHARED_SECRET", "")
+if not _SECRET:
+    raise RuntimeError("AI_SERVICE_SHARED_SECRET is not set — refusing to start.")
+
+async def verify_hmac(request: Request, call_next):
+    ts  = request.headers.get("X-Timestamp", "")
+    sig = request.headers.get("X-Signature", "")
+    if not ts or not sig:
+        raise HTTPException(401, "Missing HMAC headers")
+    if abs(time.time() - int(ts)) > 60:
+        raise HTTPException(401, "Request expired")
+    body = await request.body()
+    expected = hmac.new(_SECRET.encode(), f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, sig):
+        raise HTTPException(401, "Invalid signature")
+    return await call_next(request)
+
+Nginx SSE configuration (inspect and fix):
+
+nginx# This block MUST come before the generic /api/ block
+location ~ ^/api/v1/chat/sessions/[^/]+/messages/?$ {
+    proxy_pass         http://django;
+    proxy_http_version 1.1;
+    proxy_set_header   Host              $host;
+    proxy_set_header   X-Real-IP         $remote_addr;
+    proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header   X-Forwarded-Proto $scheme;
+    proxy_set_header   Connection        "";
+    proxy_buffering    off;
+    proxy_cache        off;
+    proxy_read_timeout 300s;
+    add_header         X-Accel-Buffering "no"       always;
+    add_header         Cache-Control     "no-cache"  always;
+}
+
+Frontend chat component — token rendering (inspect and fix):
+
+typescript// frontend/src/components/chat/MessageStream.tsx
+export function useChat(sessionId: string) {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [streaming, setStreaming] = useState(false);
+
+  const sendMessage = async (content: string) => {
+    // Add user message immediately (optimistic UI)
+    setMessages(prev => [...prev, { role: "user", content, id: Date.now().toString() }]);
+    setStreaming(true);
+
+    // Add empty assistant message placeholder
+    const assistantId = (Date.now() + 1).toString();
+    setMessages(prev => [...prev, { role: "assistant", content: "", id: assistantId }]);
+
+    // Send and stream
+    const res = await fetch(`/api/v1/chat/sessions/${sessionId}/messages/`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${getToken()}`,
+      },
+      body: JSON.stringify({ content }),
+    });
+
+    if (!res.ok || !res.body) {
+      setStreaming(false);
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        try {
+          const parsed = JSON.parse(line.slice(6));
+          if (parsed.done) { setStreaming(false); return; }
+          if (parsed.error) { setStreaming(false); return; }
+          if (parsed.token) {
+            setMessages(prev => prev.map(m =>
+              m.id === assistantId ? { ...m, content: m.content + parsed.token } : m
+            ));
+          }
+        } catch { /* ignore partial JSON */ }
+      }
+    }
+    setStreaming(false);
+  };
+
+  return { messages, sendMessage, streaming };
+}
+
+Verification — run all three:
+
+bash# 1. Test HMAC path in isolation (replace with your dev secret)
+SECRET="your-dev-secret"
+TIMESTAMP=$(date +%s)
+BODY='{"session_id":"test-123","message":"Hello, what can you help me with?","user_id":1}'
+SIG=$(printf "%s.%s" "$TIMESTAMP" "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
+curl -s -N -X POST http://localhost:8001/chat/stream/ \
+  -H "Content-Type: application/json" \
+  -H "X-Timestamp: $TIMESTAMP" \
+  -H "X-Signature: $SIG" \
+  -d "$BODY"
+# Expect: streaming SSE tokens, ending with data: {"done":true}
+
+# 2. Create a chat session
+SESSION=$(curl -s -X POST http://localhost/api/v1/chat/sessions/ \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Test session"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+echo "Session ID: $SESSION"
+
+# 3. Send a message and watch streaming
+curl -s -N -X POST http://localhost/api/v1/chat/sessions/$SESSION/messages/ \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"content":"What are the top skills for a backend engineer in 2025?"}'
+# Tokens must appear one by one — NOT all at once at the end
+
+If tokens arrive all at once at the end: Nginx is buffering. Both
+proxy_buffering off AND add_header X-Accel-Buffering "no" must be present in the
+SSE location block. Fix it and retest.
+
+STOP — streaming must show progressive tokens before continuing.
+
+
+2.5 Async AI Features (Career Paths, Job Matches, Roadmap, Interview Prep)
+
+All four async features follow this pattern. Inspect each; fix any that deviate.
+
+POST .../generate/   → 202 { job_id, estimated_seconds }
+GET  /api/v1/jobs/async-status/{job_id}/
+  → while pending: { status: "pending"|"processing", progress: 0-100 }
+  → when done:     { status: "done", result_url: "/api/v1/..." }
+  → on failure:    { status: "failed", error: "Rate limited by Gemini" }
+
+Frontend: polls every 2 s with exponential backoff after 30 s
+         shows real progress bar (not a spinner)
+         on failure: shows user-friendly error — not "Something went wrong"
+
+Critical — error messages must be user-facing, not stack traces:
+

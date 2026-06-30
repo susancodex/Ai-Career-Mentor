@@ -1,61 +1,46 @@
-import { Link, useLocation } from "react-router-dom";
+import { NavLink } from 'react-router-dom';
+import { Home, FileText, Sparkles, Briefcase, User } from 'lucide-react';
 
 const navItems = [
-  { path: "/dashboard", label: "Home", icon: "🏠" },
-  { path: "/chat", label: "Chat", icon: "💬" },
-  { path: "/careers", label: "Careers", icon: "🚀" },
-  { path: "/jobs", label: "Jobs", icon: "💼" },
-  { path: "/learning", label: "Learn", icon: "📚" },
+  { path: '/dashboard', label: 'Home',    icon: Home      },
+  { path: '/resume',    label: 'Resume',  icon: FileText  },
+  { path: '/chat',      label: 'Chat',    icon: Sparkles  },
+  { path: '/jobs',      label: 'Jobs',    icon: Briefcase },
+  { path: '/profile',   label: 'Profile', icon: User      },
 ];
 
 export function BottomNav() {
-  const location = useLocation();
-
   return (
     <nav
-      style={{
-        position: "fixed",
-        bottom: 0,
-        left: 0,
-        right: 0,
-        height: 60,
-        background: "#ffffff",
-        borderTop: "1px solid #e2e8f0",
-        display: "flex",
-        justifyContent: "space-around",
-        alignItems: "center",
-        zIndex: 1000,
-        paddingBottom: "env(safe-area-inset-bottom, 0)",
-      }}
+      className="lg:hidden fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-slate-200"
+      style={{ paddingBottom: 'env(safe-area-inset-bottom, 0)' }}
       role="navigation"
       aria-label="Main navigation"
     >
-      {navItems.map((item) => {
-        const isActive = location.pathname === item.path;
-        return (
-          <Link
+      <div className="flex items-stretch h-[60px]">
+        {navItems.map((item) => (
+          <NavLink
             key={item.path}
             to={item.path}
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              textDecoration: "none",
-              color: isActive ? "#2563eb" : "#64748b",
-              fontSize: 12,
-              fontWeight: isActive ? 600 : 400,
-              minWidth: 60,
-              minHeight: 60,
-            }}
+            className={({ isActive }) =>
+              `flex flex-col items-center justify-center flex-1 gap-0.5 min-h-[44px] text-[10px] font-semibold transition-colors ${
+                isActive ? 'text-teal-600' : 'text-slate-500 hover:text-slate-700'
+              }`
+            }
             aria-label={item.label}
-            aria-current={isActive ? "page" : undefined}
           >
-            <span style={{ fontSize: 24, marginBottom: 2 }}>{item.icon}</span>
-            <span>{item.label}</span>
-          </Link>
-        );
-      })}
+            {({ isActive }) => (
+              <>
+                <item.icon
+                  className={`w-5 h-5 transition-colors ${isActive ? 'text-teal-600' : 'text-slate-400'}`}
+                  strokeWidth={isActive ? 2.5 : 1.75}
+                />
+                <span>{item.label}</span>
+              </>
+            )}
+          </NavLink>
+        ))}
+      </div>
     </nav>
   );
 }

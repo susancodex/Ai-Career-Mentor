@@ -12,7 +12,13 @@ import { JobsPage } from './pages/jobs/JobsPage';
 import { InterviewPage } from './pages/interview/InterviewPage';
 import { LearningPage } from './pages/learning/LearningPage';
 import { ChatPage } from './pages/chat/ChatPage';
-import { ProfilePage } from './pages/profile/ProfilePage';
+import { ProfileLayout } from './pages/profile/ProfileLayout';
+import { ProfileSettingsPage } from './pages/profile/ProfileSettingsPage';
+import { ProfileAvatarPage } from './pages/profile/ProfileAvatarPage';
+import { ProfileSecurityPage } from './pages/profile/ProfileSecurityPage';
+import { ProfileNotificationsPage } from './pages/profile/ProfileNotificationsPage';
+import { ProfileAppearancePage } from './pages/profile/ProfileAppearancePage';
+import { ProfileDangerPage } from './pages/profile/ProfileDangerPage';
 import { ProtectedRoute } from './components/layout/ProtectedRoute';
 import { useAuthStore } from './store/authStore';
 import { silentRefresh } from './api/auth';
@@ -58,15 +64,28 @@ function App() {
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
 
-            {/* Protected routes — ProtectedRoute already wraps with DashboardLayout */}
-            <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-            <Route path="/resume" element={<ProtectedRoute><ResumePage /></ProtectedRoute>} />
-            <Route path="/careers" element={<ProtectedRoute><CareersPage /></ProtectedRoute>} />
-            <Route path="/jobs" element={<ProtectedRoute><JobsPage /></ProtectedRoute>} />
-            <Route path="/interview" element={<ProtectedRoute><InterviewPage /></ProtectedRoute>} />
-            <Route path="/learning" element={<ProtectedRoute><LearningPage /></ProtectedRoute>} />
-            <Route path="/chat" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
-            <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
+            {/* Protected routes — ProtectedRoute wraps with DashboardLayout */}
+            <Route path="/dashboard"  element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+            <Route path="/resume"     element={<ProtectedRoute><ResumePage /></ProtectedRoute>} />
+            <Route path="/careers"    element={<ProtectedRoute><CareersPage /></ProtectedRoute>} />
+            <Route path="/jobs"       element={<ProtectedRoute><JobsPage /></ProtectedRoute>} />
+            <Route path="/interview"  element={<ProtectedRoute><InterviewPage /></ProtectedRoute>} />
+            <Route path="/learning"   element={<ProtectedRoute><LearningPage /></ProtectedRoute>} />
+            <Route path="/chat"       element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
+
+            {/* Profile sub-routes — nested under ProfileLayout */}
+            <Route
+              path="/profile"
+              element={<ProtectedRoute><ProfileLayout /></ProtectedRoute>}
+            >
+              <Route index element={<Navigate to="settings" replace />} />
+              <Route path="settings"      element={<ProfileSettingsPage />} />
+              <Route path="avatar"        element={<ProfileAvatarPage />} />
+              <Route path="security"      element={<ProfileSecurityPage />} />
+              <Route path="notifications" element={<ProfileNotificationsPage />} />
+              <Route path="appearance"    element={<ProfileAppearancePage />} />
+              <Route path="danger"        element={<ProfileDangerPage />} />
+            </Route>
 
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="*" element={<Navigate to="/login" replace />} />
