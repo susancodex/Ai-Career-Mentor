@@ -69,7 +69,10 @@ catalog:
 
 autoInstallPeers: false
 
-onlyBuiltDependencies: '["esbuild","msw","rollup"]'
+onlyBuiltDependencies:
+  - esbuild
+  - msw
+  - rollup
 
 overrides:
   # replit uses linux-x64 only, we can exclude all other platforms

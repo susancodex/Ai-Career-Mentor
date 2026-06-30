@@ -1,0 +1,340 @@
+AI Career Mentor — Production-Grade Master Prompt
+
+(Self-Inspecting · Self-Healing · Mobile-First · Full-Featured)
+
+
+What this file is: The single authoritative prompt you hand to your AI coding assistant
+(Cursor, Claude Code, Copilot, etc.) to build, inspect, repair, and ship the AI Career Mentor
+as a real, daily-use production application. It covers every feature end-to-end — including
+a complete Profile section (avatar upload, forgot password, logout, account settings) — and
+instructs the AI to find broken features and fix them automatically without waiting for you.
+
+How to use it: Paste this entire file into your AI coding assistant as the first message.
+Follow every STOP checkpoint manually. Do not skip gates — they exist because silent failures
+in this stack are indistinguishable from success until a real user hits them.
+
+
+
+
+0. Non-Negotiable Rules — Read Before Writing a Single Line
+
+These are not suggestions. Violations silently break production.
+
+
+Inspect before you touch. Before editing any file, read it. Before wiring any integration,
+trace the full call chain in your head and identify every place it can silently fail.
+Self-heal broken features automatically. As you work through each section, run the
+verification steps. If a verification fails, fix it immediately — do not leave a comment,
+do not add a TODO, do not move on. A broken feature with a TODO comment is just a broken
+feature with extra decoration.
+Follow STOP checkpoints in order. Each one is a real gate. A green container health
+check does not mean the feature works. Run the actual curl or browser test specified.
+No placeholder code anywhere in the codebase. Search for: TODO, FIXME, pass,
+raise NotImplementedError, throw new Error("not implemented"), // stub, # stub.
+Every one found is a production bug. Fix it or delete the dead code path entirely.
+Mobile-first is not optional. Every UI component must be tested at 375px width
+(iPhone SE) before being considered done. Touch targets must be ≥ 44px. No horizontal
+scroll on any screen.
+The AI integration path is the most fragile thing in this system. The chain
+Browser → Nginx → Django → Celery → AI Service → Gemini → Redis → Browser SSE
+must be verified with a real streaming call before you build anything else on top of it.
+Any real secret found in the codebase means stop immediately. Rotate the key,
+remove it from git history with git filter-repo, then continue.
+
+
+
+1. Project Structure Audit (Run First, Every Time)
+
+bash# Run from the repo root before touching any code
+ls -1
+
+Expected output must include exactly: frontend/, backend/, ai_service/, infra/
+
+Then run the full scaffolding cleanup:
+
+bash# Remove all AI scaffolding files — they have no place in production
+find . -name "replit.nix" -o -name ".replit" -o -name "replit.toml" \
+        -o -name ".aider*" -o -name "TODO_AI.md" -o -name "GENERATED_BY_AI.md" \
+        -o -name "copilot-instructions.md" | xargs rm -f
+
+# Scan for any real secrets accidentally committed
+git log --all --full-history -- "**/.env" | head -20
+grep -rn "GOOGLE_API_KEY\s*=\s*[A-Za-z0-9]" . --include="*.py" --include="*.ts" \
+     --include="*.js" --include="*.env" | grep -v ".env.example" | grep -v "test"
+
+If the secret scan finds anything: STOP. Rotate the key. Use git filter-repo to
+purge the file from history. Do not continue until the history is clean.
+
+STOP — confirm structure is clean before proceeding.
+
+
+2. Full Feature Inventory — Inspect Every Feature, Fix What Is Broken
+
+Work through this list top to bottom. For each feature: read the code, run the
+verification, fix any failure immediately, then move to the next.
+
+2.1 Authentication System
+
+Required behaviour (inspect and fix each item):
+
+
+POST /api/v1/auth/register/ → 201, { access } in body, refresh_token httpOnly cookie set
+POST /api/v1/auth/login/ → 200, same shape
+POST /api/v1/auth/refresh/ → reads cookie only, never body or Authorization header → 200 { access }
+POST /api/v1/auth/logout/ → 204, clears cookie with Max-Age=0
+POST /api/v1/auth/password/forgot/ → accepts { email }, sends reset email, always 200
+(never leaks whether the address exists)
+POST /api/v1/auth/password/reset/ → accepts { token, new_password }, validates token
+expiry (1 hour), invalidates token after first use
+POST /api/v1/auth/password/change/ → authenticated, accepts { current_password, new_password },
+re-hashes and saves
+Social auth (Google OAuth) → if configured, token exchange works; if not configured,
+the button is hidden — it does not show a broken flow
+Cookie attributes in production: httponly=True, secure=True, samesite="None", path="/api/v1/auth/refresh/"
+Cookie attributes in development: httponly=True, secure=False, samesite="Lax"
+CORS_ALLOW_CREDENTIALS = True is set
+CORS_ALLOWED_ORIGINS is read from env, not hardcoded
+
+
+Django settings to verify (fix if missing):
+
+python# backend/config/settings/base.py
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=["http://localhost:5173", "http://localhost"])
+CORS_EXPOSE_HEADERS = ["Content-Type", "X-CSRFToken"]
+USE_X_FORWARDED_HOST = True
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+DJANGO_ALLOW_ASYNC_UNSAFE = env.bool("DJANGO_ALLOW_ASYNC_UNSAFE", default=False)
+
+Frontend token storage (inspect and fix):
+
+typescript// CORRECT — token lives only in memory, never localStorage/sessionStorage
+let _accessToken: string | null = null;
+export const setToken = (t: string) => { _accessToken = t; };
+export const getToken = () => _accessToken;
+export const clearToken = () => { _accessToken = null; };
+
+Run:
+
+bashgrep -rn "localStorage\|sessionStorage" frontend/src/ | grep -i "token\|access\|refresh"
+
+Any match is a security bug. Fix it by moving to the in-memory pattern above.
+
+Axios refresh interceptor — must use a queue, not a flag:
+
+typescript// frontend/src/lib/api.ts
+let isRefreshing = false;
+let refreshQueue: Array<(token: string) => void> = [];
+
+api.interceptors.response.use(
+  (res) => res,
+  async (error) => {
+    const original = error.config;
+    if (error.response?.status === 401 && !original._retry) {
+      original._retry = true;
+      if (isRefreshing) {
+        return new Promise((resolve) => {
+          refreshQueue.push((token) => {
+            original.headers.Authorization = `Bearer ${token}`;
+            resolve(api(original));
+          });
+        });
+      }
+      isRefreshing = true;
+      try {
+        const { data } = await api.post("/auth/refresh/");
+        setToken(data.access);
+        original.headers.Authorization = `Bearer ${data.access}`;
+        refreshQueue.forEach((cb) => cb(data.access));
+        refreshQueue = [];
+        return api(original);
+      } finally {
+        isRefreshing = false;
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
+Verification:
+
+bash# 1. Register a new user
+curl -s -c cookies.txt -X POST http://localhost/api/v1/auth/register/ \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com","password":"TestPass123!","first_name":"Test","last_name":"User"}' \
+  | python3 -m json.tool
+
+# 2. Confirm cookie was set
+grep refresh_token cookies.txt
+
+# 3. Refresh the token
+curl -s -b cookies.txt -X POST http://localhost/api/v1/auth/refresh/ | python3 -m json.tool
+
+# 4. Logout
+curl -s -b cookies.txt -X POST http://localhost/api/v1/auth/logout/ -w "%{http_code}"
+
+# 5. Confirm token no longer works
+curl -s -b cookies.txt -X POST http://localhost/api/v1/auth/refresh/ -w "%{http_code}"
+# Must return 401
+
+# 6. Test forgot password
+curl -s -X POST http://localhost/api/v1/auth/password/forgot/ \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com"}' -w "%{http_code}"
+# Must return 200 regardless of whether email exists
+
+STOP — all 6 verification steps must pass before continuing.
+
+
+2.2 Profile Section (Complete — Inspect and Fix Every Item)
+
+The profile section is a first-class feature, not an afterthought. Every item below
+must work end-to-end.
+
+2.2.1 Backend — Profile API
+
+python# backend/apps/users/models.py
+# Ensure UserProfile model has ALL of these fields
+class UserProfile(models.Model):
+    user         = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
+    avatar_url   = models.URLField(blank=True, default="")  # Cloudinary URL
+    avatar_public_id = models.CharField(max_length=255, blank=True, default="")
+    bio          = models.TextField(blank=True, default="")
+    phone        = models.CharField(max_length=20, blank=True, default="")
+    location     = models.CharField(max_length=100, blank=True, default="")
+    linkedin_url = models.URLField(blank=True, default="")
+    website_url  = models.URLField(blank=True, default="")
+    job_title    = models.CharField(max_length=100, blank=True, default="")
+    company      = models.CharField(max_length=100, blank=True, default="")
+    years_experience = models.PositiveSmallIntegerField(null=True, blank=True)
+    preferred_roles  = models.JSONField(default=list, blank=True)  # e.g. ["backend", "ml"]
+    skills       = models.JSONField(default=list, blank=True)
+    email_notifications_enabled = models.BooleanField(default=True)
+    theme_preference = models.CharField(
+        max_length=10,
+        choices=[("light", "Light"), ("dark", "Dark"), ("system", "System")],
+        default="system",
+    )
+    created_at   = models.DateTimeField(auto_now_add=True)
+    updated_at   = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["user"])]
+
+# Signal to auto-create profile on user creation
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+
+@receiver(post_save, sender=User)
+def create_user_profile(sender, instance, created, **kwargs):
+    if created:
+        UserProfile.objects.get_or_create(user=instance)
+
+python# backend/apps/users/serializers.py
+class UserProfileSerializer(serializers.ModelSerializer):
+    email    = serializers.EmailField(source="user.email", read_only=True)
+    first_name = serializers.CharField(source="user.first_name")
+    last_name  = serializers.CharField(source="user.last_name")
+
+    class Meta:
+        model  = UserProfile
+        fields = [
+            "id", "email", "first_name", "last_name", "avatar_url",
+            "bio", "phone", "location", "linkedin_url", "website_url",
+            "job_title", "company", "years_experience", "preferred_roles",
+            "skills", "email_notifications_enabled", "theme_preference",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "email", "created_at", "updated_at", "avatar_url"]
+
+    def update(self, instance, validated_data):
+        user_data = validated_data.pop("user", {})
+        if user_data:
+            user = instance.user
+            for attr, value in user_data.items():
+                setattr(user, attr, value)
+            user.save(update_fields=list(user_data.keys()))
+        return super().update(instance, validated_data)
+
+class AvatarUploadSerializer(serializers.Serializer):
+    cloudinary_url       = serializers.URLField()
+    cloudinary_public_id = serializers.CharField(max_length=255)
+
+python# backend/apps/users/views.py — Profile endpoints
+class ProfileView(generics.RetrieveUpdateAPIView):
+    serializer_class   = UserProfileSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        profile, _ = UserProfile.objects.get_or_create(user=self.request.user)
+        return profile
+
+class AvatarUploadView(APIView):
+    """
+    Accepts a Cloudinary URL already uploaded by the frontend.
+    Validates the URL belongs to our Cloudinary cloud before saving.
+    If the user had a previous avatar, deletes it from Cloudinary.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = AvatarUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        cloud_name = settings.CLOUDINARY_CLOUD_NAME
+        url        = serializer.validated_data["cloudinary_url"]
+        public_id  = serializer.validated_data["cloudinary_public_id"]
+
+        # Validate URL belongs to our cloud
+        if f"res.cloudinary.com/{cloud_name}" not in url:
+            return Response({"error": "Invalid Cloudinary URL."}, status=400)
+
+        profile = request.user.profile
+
+        # Delete previous avatar from Cloudinary if one exists
+        if profile.avatar_public_id:
+            try:
+                import cloudinary.uploader
+                cloudinary.uploader.destroy(profile.avatar_public_id)
+            except Exception:
+                pass  # Don't fail the upload if cleanup fails
+
+        profile.avatar_url       = url
+        profile.avatar_public_id = public_id
+        profile.save(update_fields=["avatar_url", "avatar_public_id", "updated_at"])
+        return Response({"avatar_url": url})
+
+class DeleteAccountView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request):
+        password = request.data.get("password", "")
+        if not request.user.check_password(password):
+            return Response({"error": "Incorrect password."}, status=400)
+
+        # Clean up Cloudinary avatar if exists
+        if hasattr(request.user, "profile") and request.user.profile.avatar_public_id:
+            try:
+                import cloudinary.uploader
+                cloudinary.uploader.destroy(request.user.profile.avatar_public_id)
+            except Exception:
+                pass
+
+        request.user.delete()
+        response = Response(status=204)
+        response.delete_cookie("refresh_token")
+        return response
+
+python# backend/apps/users/urls.py — register these routes
+urlpatterns = [
+    path("auth/register/",             RegisterView.as_view(),          name="register"),
+    path("auth/login/",                LoginView.as_view(),             name="login"),
+    path("auth/logout/",               LogoutView.as_view(),            name="logout"),
+    path("auth/refresh/",              TokenRefreshView.as_view(),      name="token-refresh"),
+    path("auth/password/forgot/",      ForgotPasswordView.as_view(),    name="password-forgot"),
+    path("auth/password/reset/",       ResetPasswordView.as_view(),     name="password-reset"),
+    path("auth/password/change/",      ChangePasswordView.as_view(),    name="password-change"),
+    path("me/",                        ProfileView.as_view(),           name="profile"),
+    path("me/avatar/",                 AvatarUploadView.as_view(),      name="avatar-upload"),
+    path("me/delete/",                 DeleteAccountView.as_view(),     name="account-delete"),
+]

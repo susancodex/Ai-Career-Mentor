@@ -1,0 +1,90 @@
+modules = ["nodejs-20", "python-3.11", "web"]
+[agent]
+expertMode = true
+stack = "BEST_EFFORT_FALLBACK"
+
+[nix]
+channel = "stable-25_05"
+packages = ["libxcrypt", "postgresql"]
+
+[userenv]
+
+[userenv.shared]
+PORT = "5000"
+BASE_PATH = "/"
+DJANGO_PORT = "8000"
+AI_SERVICE_PORT = "8001"
+DJANGO_SETTINGS_MODULE = "config.settings.dev"
+DEBUG = "True"
+DJANGO_ALLOW_ASYNC_UNSAFE = "true"
+AI_SERVICE_URL = "http://localhost:8001"
+AI_SERVICE_SHARED_SECRET = "dev-shared-secret-change-in-prod"
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start application"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start Backend"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start AI Service"
+
+[[workflows.workflow]]
+name = "Start application"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd frontend && PORT=5000 BASE_PATH=/ pnpm dev"
+waitForPort = 5000
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
+[[workflows.workflow]]
+name = "Start Backend"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd backend && DJANGO_SETTINGS_MODULE=config.settings.dev python3 manage.py runserver 0.0.0.0:8000"
+waitForPort = 8000
+
+[[workflows.workflow]]
+name = "Start AI Service"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd ai_service && uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload"
+waitForPort = 8001
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[ports]]
+localPort = 5000
+externalPort = 80
+
+[[ports]]
+localPort = 8000
+externalPort = 8000
+
+[deployment]
+deploymentTarget = "autoscale"
+run = ["bash", "-c", "cd backend && DJANGO_SETTINGS_MODULE=config.settings.dev python3 manage.py runserver 0.0.0.0:5000"]
+build = ["bash", "-c", "cd frontend && PORT=5000 BASE_PATH=/ pnpm build && cd ../backend && python3 manage.py collectstatic --noinput"]

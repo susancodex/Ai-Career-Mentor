@@ -1,0 +1,1419 @@
+# AI Career Mentor — Production-Grade Master Prompt
+# (Self-Inspecting · Self-Healing · Mobile-First · Full-Featured)
+
+> **What this file is:** The single authoritative prompt you hand to your AI coding assistant
+> (Cursor, Claude Code, Copilot, etc.) to build, inspect, repair, and ship the AI Career Mentor
+> as a real, daily-use production application. It covers every feature end-to-end — including
+> a complete Profile section (avatar upload, forgot password, logout, account settings) — and
+> instructs the AI to find broken features and fix them automatically without waiting for you.
+>
+> **How to use it:** Paste this entire file into your AI coding assistant as the first message.
+> Follow every STOP checkpoint manually. Do not skip gates — they exist because silent failures
+> in this stack are indistinguishable from success until a real user hits them.
+
+---
+
+## 0. Non-Negotiable Rules — Read Before Writing a Single Line
+
+These are not suggestions. Violations silently break production.
+
+1. **Inspect before you touch.** Before editing any file, read it. Before wiring any integration,
+   trace the full call chain in your head and identify every place it can silently fail.
+
+2. **Self-heal broken features automatically.** As you work through each section, run the
+   verification steps. If a verification fails, fix it immediately — do not leave a comment,
+   do not add a TODO, do not move on. A broken feature with a TODO comment is just a broken
+   feature with extra decoration.
+
+3. **Follow STOP checkpoints in order.** Each one is a real gate. A green container health
+   check does not mean the feature works. Run the actual curl or browser test specified.
+
+4. **No placeholder code anywhere in the codebase.** Search for: `TODO`, `FIXME`, `pass`,
+   `raise NotImplementedError`, `throw new Error("not implemented")`, `// stub`, `# stub`.
+   Every one found is a production bug. Fix it or delete the dead code path entirely.
+
+5. **Mobile-first is not optional.** Every UI component must be tested at 375px width
+   (iPhone SE) before being considered done. Touch targets must be ≥ 44px. No horizontal
+   scroll on any screen.
+
+6. **The AI integration path is the most fragile thing in this system.** The chain
+   Browser → Nginx → Django → Celery → AI Service → Gemini → Redis → Browser SSE
+   must be verified with a real streaming call before you build anything else on top of it.
+
+7. **Any real secret found in the codebase means stop immediately.** Rotate the key,
+   remove it from git history with `git filter-repo`, then continue.
+
+---
+
+## 1. Project Structure Audit (Run First, Every Time)
+
+```bash
+# Run from the repo root before touching any code
+ls -1
+```
+
+Expected output must include exactly: `frontend/`, `backend/`, `ai_service/`, `infra/`
+
+Then run the full scaffolding cleanup:
+
+```bash
+# Remove all AI scaffolding files — they have no place in production
+find . -name "replit.nix" -o -name ".replit" -o -name "replit.toml" \
+        -o -name ".aider*" -o -name "TODO_AI.md" -o -name "GENERATED_BY_AI.md" \
+        -o -name "copilot-instructions.md" | xargs rm -f
+
+# Scan for any real secrets accidentally committed
+git log --all --full-history -- "**/.env" | head -20
+grep -rn "GOOGLE_API_KEY\s*=\s*[A-Za-z0-9]" . --include="*.py" --include="*.ts" \
+     --include="*.js" --include="*.env" | grep -v ".env.example" | grep -v "test"
+```
+
+If the secret scan finds anything: **STOP. Rotate the key. Use `git filter-repo` to
+purge the file from history. Do not continue until the history is clean.**
+
+**STOP — confirm structure is clean before proceeding.**
+
+---
+
+## 2. Full Feature Inventory — Inspect Every Feature, Fix What Is Broken
+
+Work through this list top to bottom. For each feature: read the code, run the
+verification, fix any failure immediately, then move to the next.
+
+### 2.1 Authentication System
+
+**Required behaviour (inspect and fix each item):**
+
+- `POST /api/v1/auth/register/` → 201, `{ access }` in body, `refresh_token` httpOnly cookie set
+- `POST /api/v1/auth/login/` → 200, same shape
+- `POST /api/v1/auth/refresh/` → reads cookie only, never body or Authorization header → 200 `{ access }`
+- `POST /api/v1/auth/logout/` → 204, clears cookie with `Max-Age=0`
+- `POST /api/v1/auth/password/forgot/` → accepts `{ email }`, sends reset email, always 200
+  (never leaks whether the address exists)
+- `POST /api/v1/auth/password/reset/` → accepts `{ token, new_password }`, validates token
+  expiry (1 hour), invalidates token after first use
+- `POST /api/v1/auth/password/change/` → authenticated, accepts `{ current_password, new_password }`,
+  re-hashes and saves
+- Social auth (Google OAuth) → if configured, token exchange works; if not configured,
+  the button is hidden — it does not show a broken flow
+- Cookie attributes in production: `httponly=True, secure=True, samesite="None", path="/api/v1/auth/refresh/"`
+- Cookie attributes in development: `httponly=True, secure=False, samesite="Lax"`
+- `CORS_ALLOW_CREDENTIALS = True` is set
+- `CORS_ALLOWED_ORIGINS` is read from env, not hardcoded
+
+**Django settings to verify (fix if missing):**
+
+```python
+# backend/config/settings/base.py
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=["http://localhost:5173", "http://localhost"])
+CORS_EXPOSE_HEADERS = ["Content-Type", "X-CSRFToken"]
+USE_X_FORWARDED_HOST = True
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+DJANGO_ALLOW_ASYNC_UNSAFE = env.bool("DJANGO_ALLOW_ASYNC_UNSAFE", default=False)
+```
+
+**Frontend token storage (inspect and fix):**
+
+```typescript
+// CORRECT — token lives only in memory, never localStorage/sessionStorage
+let _accessToken: string | null = null;
+export const setToken = (t: string) => { _accessToken = t; };
+export const getToken = () => _accessToken;
+export const clearToken = () => { _accessToken = null; };
+```
+
+Run:
+```bash
+grep -rn "localStorage\|sessionStorage" frontend/src/ | grep -i "token\|access\|refresh"
+```
+Any match is a security bug. Fix it by moving to the in-memory pattern above.
+
+**Axios refresh interceptor — must use a queue, not a flag:**
+
+```typescript
+// frontend/src/lib/api.ts
+let isRefreshing = false;
+let refreshQueue: Array<(token: string) => void> = [];
+
+api.interceptors.response.use(
+  (res) => res,
+  async (error) => {
+    const original = error.config;
+    if (error.response?.status === 401 && !original._retry) {
+      original._retry = true;
+      if (isRefreshing) {
+        return new Promise((resolve) => {
+          refreshQueue.push((token) => {
+            original.headers.Authorization = `Bearer ${token}`;
+            resolve(api(original));
+          });
+        });
+      }
+      isRefreshing = true;
+      try {
+        const { data } = await api.post("/auth/refresh/");
+        setToken(data.access);
+        original.headers.Authorization = `Bearer ${data.access}`;
+        refreshQueue.forEach((cb) => cb(data.access));
+        refreshQueue = [];
+        return api(original);
+      } finally {
+        isRefreshing = false;
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+```
+
+**Verification:**
+```bash
+# 1. Register a new user
+curl -s -c cookies.txt -X POST http://localhost/api/v1/auth/register/ \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com","password":"TestPass123!","first_name":"Test","last_name":"User"}' \
+  | python3 -m json.tool
+
+# 2. Confirm cookie was set
+grep refresh_token cookies.txt
+
+# 3. Refresh the token
+curl -s -b cookies.txt -X POST http://localhost/api/v1/auth/refresh/ | python3 -m json.tool
+
+# 4. Logout
+curl -s -b cookies.txt -X POST http://localhost/api/v1/auth/logout/ -w "%{http_code}"
+
+# 5. Confirm token no longer works
+curl -s -b cookies.txt -X POST http://localhost/api/v1/auth/refresh/ -w "%{http_code}"
+# Must return 401
+
+# 6. Test forgot password
+curl -s -X POST http://localhost/api/v1/auth/password/forgot/ \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com"}' -w "%{http_code}"
+# Must return 200 regardless of whether email exists
+```
+
+**STOP — all 6 verification steps must pass before continuing.**
+
+---
+
+### 2.2 Profile Section (Complete — Inspect and Fix Every Item)
+
+The profile section is a first-class feature, not an afterthought. Every item below
+must work end-to-end.
+
+#### 2.2.1 Backend — Profile API
+
+```python
+# backend/apps/users/models.py
+# Ensure UserProfile model has ALL of these fields
+class UserProfile(models.Model):
+    user         = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
+    avatar_url   = models.URLField(blank=True, default="")  # Cloudinary URL
+    avatar_public_id = models.CharField(max_length=255, blank=True, default="")
+    bio          = models.TextField(blank=True, default="")
+    phone        = models.CharField(max_length=20, blank=True, default="")
+    location     = models.CharField(max_length=100, blank=True, default="")
+    linkedin_url = models.URLField(blank=True, default="")
+    website_url  = models.URLField(blank=True, default="")
+    job_title    = models.CharField(max_length=100, blank=True, default="")
+    company      = models.CharField(max_length=100, blank=True, default="")
+    years_experience = models.PositiveSmallIntegerField(null=True, blank=True)
+    preferred_roles  = models.JSONField(default=list, blank=True)  # e.g. ["backend", "ml"]
+    skills       = models.JSONField(default=list, blank=True)
+    email_notifications_enabled = models.BooleanField(default=True)
+    theme_preference = models.CharField(
+        max_length=10,
+        choices=[("light", "Light"), ("dark", "Dark"), ("system", "System")],
+        default="system",
+    )
+    created_at   = models.DateTimeField(auto_now_add=True)
+    updated_at   = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["user"])]
+
+# Signal to auto-create profile on user creation
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+
+@receiver(post_save, sender=User)
+def create_user_profile(sender, instance, created, **kwargs):
+    if created:
+        UserProfile.objects.get_or_create(user=instance)
+```
+
+```python
+# backend/apps/users/serializers.py
+class UserProfileSerializer(serializers.ModelSerializer):
+    email    = serializers.EmailField(source="user.email", read_only=True)
+    first_name = serializers.CharField(source="user.first_name")
+    last_name  = serializers.CharField(source="user.last_name")
+
+    class Meta:
+        model  = UserProfile
+        fields = [
+            "id", "email", "first_name", "last_name", "avatar_url",
+            "bio", "phone", "location", "linkedin_url", "website_url",
+            "job_title", "company", "years_experience", "preferred_roles",
+            "skills", "email_notifications_enabled", "theme_preference",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "email", "created_at", "updated_at", "avatar_url"]
+
+    def update(self, instance, validated_data):
+        user_data = validated_data.pop("user", {})
+        if user_data:
+            user = instance.user
+            for attr, value in user_data.items():
+                setattr(user, attr, value)
+            user.save(update_fields=list(user_data.keys()))
+        return super().update(instance, validated_data)
+
+class AvatarUploadSerializer(serializers.Serializer):
+    cloudinary_url       = serializers.URLField()
+    cloudinary_public_id = serializers.CharField(max_length=255)
+```
+
+```python
+# backend/apps/users/views.py — Profile endpoints
+class ProfileView(generics.RetrieveUpdateAPIView):
+    serializer_class   = UserProfileSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        profile, _ = UserProfile.objects.get_or_create(user=self.request.user)
+        return profile
+
+class AvatarUploadView(APIView):
+    """
+    Accepts a Cloudinary URL already uploaded by the frontend.
+    Validates the URL belongs to our Cloudinary cloud before saving.
+    If the user had a previous avatar, deletes it from Cloudinary.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = AvatarUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        cloud_name = settings.CLOUDINARY_CLOUD_NAME
+        url        = serializer.validated_data["cloudinary_url"]
+        public_id  = serializer.validated_data["cloudinary_public_id"]
+
+        # Validate URL belongs to our cloud
+        if f"res.cloudinary.com/{cloud_name}" not in url:
+            return Response({"error": "Invalid Cloudinary URL."}, status=400)
+
+        profile = request.user.profile
+
+        # Delete previous avatar from Cloudinary if one exists
+        if profile.avatar_public_id:
+            try:
+                import cloudinary.uploader
+                cloudinary.uploader.destroy(profile.avatar_public_id)
+            except Exception:
+                pass  # Don't fail the upload if cleanup fails
+
+        profile.avatar_url       = url
+        profile.avatar_public_id = public_id
+        profile.save(update_fields=["avatar_url", "avatar_public_id", "updated_at"])
+        return Response({"avatar_url": url})
+
+class DeleteAccountView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request):
+        password = request.data.get("password", "")
+        if not request.user.check_password(password):
+            return Response({"error": "Incorrect password."}, status=400)
+
+        # Clean up Cloudinary avatar if exists
+        if hasattr(request.user, "profile") and request.user.profile.avatar_public_id:
+            try:
+                import cloudinary.uploader
+                cloudinary.uploader.destroy(request.user.profile.avatar_public_id)
+            except Exception:
+                pass
+
+        request.user.delete()
+        response = Response(status=204)
+        response.delete_cookie("refresh_token")
+        return response
+```
+
+```python
+# backend/apps/users/urls.py — register these routes
+urlpatterns = [
+    path("auth/register/",             RegisterView.as_view(),          name="register"),
+    path("auth/login/",                LoginView.as_view(),             name="login"),
+    path("auth/logout/",               LogoutView.as_view(),            name="logout"),
+    path("auth/refresh/",              TokenRefreshView.as_view(),      name="token-refresh"),
+    path("auth/password/forgot/",      ForgotPasswordView.as_view(),    name="password-forgot"),
+    path("auth/password/reset/",       ResetPasswordView.as_view(),     name="password-reset"),
+    path("auth/password/change/",      ChangePasswordView.as_view(),    name="password-change"),
+    path("me/",                        ProfileView.as_view(),           name="profile"),
+    path("me/avatar/",                 AvatarUploadView.as_view(),      name="avatar-upload"),
+    path("me/delete/",                 DeleteAccountView.as_view(),     name="account-delete"),
+]
+```
+
+#### 2.2.2 Frontend — Profile UI
+
+The profile section must include every one of the following screens/panels. If any
+are missing, create them. If any are broken, fix them.
+
+**Profile page structure (`/profile`):**
+
+```
+/profile
+  ├── /profile/settings        ← General info (name, bio, location, job title)
+  ├── /profile/avatar          ← Upload / remove profile picture
+  ├── /profile/security        ← Change password, active sessions, 2FA (future)
+  ├── /profile/notifications   ← Email notification preferences
+  ├── /profile/appearance      ← Light / dark / system theme
+  └── /profile/danger          ← Delete account (requires password confirm)
+```
+
+**Avatar upload component (fix if broken):**
+
+```typescript
+// frontend/src/components/profile/AvatarUpload.tsx
+import { useRef, useState } from "react";
+
+const MAX_SIZE_BYTES = 2 * 1024 * 1024; // 2 MB for avatars
+const ALLOWED_TYPES  = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+
+export function AvatarUpload({ currentUrl, onSuccess }: Props) {
+  const inputRef   = useRef<HTMLInputElement>(null);
+  const [preview, setPreview]   = useState<string | null>(null);
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState<string | null>(null);
+
+  const handleFile = async (file: File) => {
+    setError(null);
+
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      setError("Only JPEG, PNG, WebP, and GIF images are accepted.");
+      return;
+    }
+    if (file.size > MAX_SIZE_BYTES) {
+      setError("Image must be under 2 MB.");
+      return;
+    }
+
+    // Show local preview immediately
+    setPreview(URL.createObjectURL(file));
+    setLoading(true);
+
+    try {
+      // Upload to Cloudinary unsigned preset (avatars only)
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("upload_preset", import.meta.env.VITE_CLOUDINARY_AVATAR_PRESET);
+      formData.append("folder", "avatars");
+
+      const cloudRes = await fetch(
+        `https://api.cloudinary.com/v1_1/${import.meta.env.VITE_CLOUDINARY_CLOUD_NAME}/image/upload`,
+        { method: "POST", body: formData }
+      );
+      if (!cloudRes.ok) throw new Error("Cloudinary upload failed.");
+      const { secure_url, public_id } = await cloudRes.json();
+
+      // Save to our backend
+      await api.post("/me/avatar/", {
+        cloudinary_url: secure_url,
+        cloudinary_public_id: public_id,
+      });
+
+      onSuccess(secure_url);
+    } catch (e: any) {
+      setError(e.message ?? "Upload failed. Try again.");
+      setPreview(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div>
+      {/* Avatar display — 96px circle, touch-friendly */}
+      <button
+        onClick={() => inputRef.current?.click()}
+        aria-label="Change profile picture"
+        style={{ width: 96, height: 96, borderRadius: "50%", overflow: "hidden",
+                 border: "2px solid #e2e8f0", cursor: "pointer", background: "#f1f5f9" }}
+      >
+        {(preview || currentUrl) ? (
+          <img src={preview ?? currentUrl} alt="Your avatar"
+               style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+        ) : (
+          <span style={{ fontSize: 36 }}>👤</span>
+        )}
+      </button>
+
+      <input ref={inputRef} type="file" accept={ALLOWED_TYPES.join(",")}
+             style={{ display: "none" }}
+             onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
+
+      {loading && <p>Uploading…</p>}
+      {error   && <p role="alert" style={{ color: "red" }}>{error}</p>}
+    </div>
+  );
+}
+```
+
+**Forgot password flow (fix if broken):**
+
+```typescript
+// frontend/src/pages/auth/ForgotPassword.tsx
+// Step 1: User enters email → POST /auth/password/forgot/
+// Step 2: Show "check your email" screen (never say whether email exists)
+// Step 3: User clicks link in email → lands on /reset-password?token=...
+// Step 4: User enters new password → POST /auth/password/reset/
+// Step 5: Redirect to /login with success toast
+
+// Critical: the forgot-password form must show the same success message
+// whether the email exists or not — prevents user enumeration attacks.
+```
+
+**Logout (fix if broken):**
+
+```typescript
+// frontend/src/hooks/useLogout.ts
+export function useLogout() {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  return async function logout() {
+    try {
+      await api.post("/auth/logout/");
+    } catch {
+      // Logout must always succeed from the user's perspective,
+      // even if the server call fails
+    } finally {
+      clearToken();              // clear in-memory access token
+      queryClient.clear();       // clear all cached data
+      navigate("/login", { replace: true });
+    }
+  };
+}
+```
+
+**Profile page — mobile layout requirement:**
+
+```
+Mobile (< 640px):
+  - Full-width stacked layout
+  - Bottom navigation bar with 5 tabs: Home | Resume | Chat | Jobs | Profile
+  - Each tab icon ≥ 44px touch target
+  - No sidebar
+
+Desktop (≥ 1024px):
+  - Left sidebar navigation (240px fixed)
+  - Main content area (flex-1)
+  - Profile settings in right panel
+```
+
+**Verification:**
+```bash
+# 1. Fetch profile (must return full shape)
+TOKEN="<paste access token from login>"
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost/api/v1/me/ | python3 -m json.tool
+
+# 2. Update profile
+curl -s -X PATCH http://localhost/api/v1/me/ \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"first_name":"Jane","bio":"Senior engineer","location":"San Francisco"}' \
+  | python3 -m json.tool
+
+# 3. Trigger forgot password
+curl -s -X POST http://localhost/api/v1/auth/password/forgot/ \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com"}' -w "\nHTTP %{http_code}\n"
+# Must return HTTP 200 and NOT say "email not found"
+```
+
+**STOP — profile CRUD, avatar upload endpoint, forgot-password, and logout must all
+return expected responses before continuing.**
+
+---
+
+### 2.3 Resume Upload and Parsing
+
+```
+Upload flow:
+1. User drags file → validate: type (.pdf, .docx only), size (≤ 5 MB)
+2. Upload directly to Cloudinary (unsigned preset restricted to pdf/docx in dashboard)
+3. POST /api/v1/resumes/ { cloudinary_url, cloudinary_public_id, original_filename }
+4. → 201 { id, status: "uploaded" }
+5. Celery task fires → AI service parses resume → updates status to "parsed"
+6. Frontend polls GET /api/v1/resumes/{id}/ every 3 s → shows status
+7. When status = "parsed", fetch GET /api/v1/resumes/{id}/analysis/
+8. Show analysis with skills, experience, suggested improvements
+```
+
+**Inspect and fix:**
+- File type validation must be on both frontend (UX) and backend (security)
+- If Celery task fails, `status` must become `"failed"` with an `error_message` — not
+  stay stuck on `"processing"` forever
+- Resume analysis endpoint must return 404 (not 500) if analysis is not yet ready
+- Old resumes are listed at `GET /api/v1/resumes/` with pagination (20 per page)
+- Deleting a resume must also delete it from Cloudinary
+
+**Verification:**
+```bash
+# Upload a real PDF and watch it parse
+curl -s -X POST http://localhost/api/v1/resumes/ \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"cloudinary_url\":\"https://res.cloudinary.com/YOURCLOUD/raw/upload/v1/test.pdf\",
+       \"cloudinary_public_id\":\"test\",
+       \"original_filename\":\"my_resume.pdf\"}" \
+  | python3 -m json.tool
+
+# Poll until status changes
+for i in {1..20}; do
+  STATUS=$(curl -s -H "Authorization: Bearer $TOKEN" http://localhost/api/v1/resumes/1/ \
+           | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")
+  echo "[$i] Status: $STATUS"
+  [ "$STATUS" != "uploaded" ] && [ "$STATUS" != "processing" ] && break
+  sleep 3
+done
+```
+
+**STOP — resume must reach "parsed" or "failed" within 60 s. "Stuck on processing"
+means the Celery task or AI service call is broken — fix it before continuing.**
+
+---
+
+### 2.4 AI Chat — Streaming (Most Critical Feature)
+
+The full call chain (read it twice):
+
+```
+Browser EventSource
+  → POST /api/v1/chat/sessions/{id}/messages/        [Nginx: no buffering]
+      → Django view: persists message, fires Celery task, subscribes to Redis
+          → Celery: signs HMAC, calls POST http://ai_service:8001/chat/stream/
+              → FastAPI: verifies HMAC, invokes LangGraph → Gemini
+              → Streams SSE tokens back to Celery
+          → Celery: publishes each token to Redis channel
+      → Django SSE view: listens on Redis, yields tokens to browser
+  → Browser: renders tokens progressively, word by word
+```
+
+**HMAC signing (inspect and fix):**
+
+```python
+# backend/apps/chat/tasks.py
+import hashlib, hmac, time, httpx, json, redis
+from django.conf import settings
+
+def _hmac_headers(body: bytes) -> dict:
+    timestamp = str(int(time.time()))
+    sig = hmac.new(
+        settings.AI_SERVICE_SHARED_SECRET.encode(),
+        msg=f"{timestamp}.".encode() + body,
+        digestmod=hashlib.sha256,
+    ).hexdigest()
+    # NEVER log these headers
+    return {"X-Timestamp": timestamp, "X-Signature": sig, "Content-Type": "application/json"}
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=2)
+def stream_chat_message(self, session_id: str, message: str, user_id: int):
+    r = redis.from_url(settings.REDIS_URL)
+    channel = f"chat:stream:{session_id}"
+    payload = json.dumps({"session_id": session_id, "message": message, "user_id": user_id}).encode()
+    headers = _hmac_headers(payload)
+    try:
+        with httpx.stream("POST", f"{settings.AI_SERVICE_URL}/chat/stream/",
+                          content=payload, headers=headers, timeout=300) as resp:
+            resp.raise_for_status()
+            for line in resp.iter_lines():
+                if line.startswith("data:"):
+                    r.publish(channel, line)
+        r.publish(channel, 'data: {"done":true}')
+    except Exception as exc:
+        r.publish(channel, f'data: {{"error":"{type(exc).__name__}"}}')
+        raise self.retry(exc=exc)
+```
+
+**Django SSE view (inspect and fix):**
+
+```python
+# backend/apps/chat/views.py
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def send_message(request, session_id):
+    content = request.data.get("content", "").strip()
+    if not content:
+        return Response({"error": "content is required"}, status=400)
+    if len(content) > 4000:
+        return Response({"error": "Message too long (max 4000 characters)."}, status=400)
+
+    session = get_object_or_404(ChatSession, id=session_id, user=request.user)
+    Message.objects.create(session=session, role="user", content=content)
+    stream_chat_message.delay(str(session_id), content, request.user.id)
+
+    r = redis.from_url(settings.REDIS_URL)
+    ps = r.pubsub()
+    ps.subscribe(f"chat:stream:{session_id}")
+
+    def event_stream():
+        try:
+            for msg in ps.listen():
+                if msg["type"] == "message":
+                    data = msg["data"].decode()
+                    yield f"{data}\n\n"
+                    if '"done"' in data or '"error"' in data:
+                        break
+        finally:
+            ps.unsubscribe()
+            ps.close()
+
+    response = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
+    response["Cache-Control"] = "no-cache"
+    response["X-Accel-Buffering"] = "no"
+    return response
+```
+
+**FastAPI HMAC middleware (inspect and fix):**
+
+```python
+# ai_service/middleware/hmac_auth.py
+import hashlib, hmac, os, time
+from fastapi import Request, HTTPException
+
+_SECRET = os.environ.get("AI_SERVICE_SHARED_SECRET", "")
+if not _SECRET:
+    raise RuntimeError("AI_SERVICE_SHARED_SECRET is not set — refusing to start.")
+
+async def verify_hmac(request: Request, call_next):
+    ts  = request.headers.get("X-Timestamp", "")
+    sig = request.headers.get("X-Signature", "")
+    if not ts or not sig:
+        raise HTTPException(401, "Missing HMAC headers")
+    if abs(time.time() - int(ts)) > 60:
+        raise HTTPException(401, "Request expired")
+    body = await request.body()
+    expected = hmac.new(_SECRET.encode(), f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, sig):
+        raise HTTPException(401, "Invalid signature")
+    return await call_next(request)
+```
+
+**Nginx SSE configuration (inspect and fix):**
+
+```nginx
+# This block MUST come before the generic /api/ block
+location ~ ^/api/v1/chat/sessions/[^/]+/messages/?$ {
+    proxy_pass         http://django;
+    proxy_http_version 1.1;
+    proxy_set_header   Host              $host;
+    proxy_set_header   X-Real-IP         $remote_addr;
+    proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header   X-Forwarded-Proto $scheme;
+    proxy_set_header   Connection        "";
+    proxy_buffering    off;
+    proxy_cache        off;
+    proxy_read_timeout 300s;
+    add_header         X-Accel-Buffering "no"       always;
+    add_header         Cache-Control     "no-cache"  always;
+}
+```
+
+**Frontend chat component — token rendering (inspect and fix):**
+
+```typescript
+// frontend/src/components/chat/MessageStream.tsx
+export function useChat(sessionId: string) {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [streaming, setStreaming] = useState(false);
+
+  const sendMessage = async (content: string) => {
+    // Add user message immediately (optimistic UI)
+    setMessages(prev => [...prev, { role: "user", content, id: Date.now().toString() }]);
+    setStreaming(true);
+
+    // Add empty assistant message placeholder
+    const assistantId = (Date.now() + 1).toString();
+    setMessages(prev => [...prev, { role: "assistant", content: "", id: assistantId }]);
+
+    // Send and stream
+    const res = await fetch(`/api/v1/chat/sessions/${sessionId}/messages/`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${getToken()}`,
+      },
+      body: JSON.stringify({ content }),
+    });
+
+    if (!res.ok || !res.body) {
+      setStreaming(false);
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        try {
+          const parsed = JSON.parse(line.slice(6));
+          if (parsed.done) { setStreaming(false); return; }
+          if (parsed.error) { setStreaming(false); return; }
+          if (parsed.token) {
+            setMessages(prev => prev.map(m =>
+              m.id === assistantId ? { ...m, content: m.content + parsed.token } : m
+            ));
+          }
+        } catch { /* ignore partial JSON */ }
+      }
+    }
+    setStreaming(false);
+  };
+
+  return { messages, sendMessage, streaming };
+}
+```
+
+**Verification — run all three:**
+
+```bash
+# 1. Test HMAC path in isolation (replace with your dev secret)
+SECRET="your-dev-secret"
+TIMESTAMP=$(date +%s)
+BODY='{"session_id":"test-123","message":"Hello, what can you help me with?","user_id":1}'
+SIG=$(printf "%s.%s" "$TIMESTAMP" "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
+curl -s -N -X POST http://localhost:8001/chat/stream/ \
+  -H "Content-Type: application/json" \
+  -H "X-Timestamp: $TIMESTAMP" \
+  -H "X-Signature: $SIG" \
+  -d "$BODY"
+# Expect: streaming SSE tokens, ending with data: {"done":true}
+
+# 2. Create a chat session
+SESSION=$(curl -s -X POST http://localhost/api/v1/chat/sessions/ \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Test session"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+echo "Session ID: $SESSION"
+
+# 3. Send a message and watch streaming
+curl -s -N -X POST http://localhost/api/v1/chat/sessions/$SESSION/messages/ \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"content":"What are the top skills for a backend engineer in 2025?"}'
+# Tokens must appear one by one — NOT all at once at the end
+```
+
+**If tokens arrive all at once at the end:** Nginx is buffering. Both
+`proxy_buffering off` AND `add_header X-Accel-Buffering "no"` must be present in the
+SSE location block. Fix it and retest.
+
+**STOP — streaming must show progressive tokens before continuing.**
+
+---
+
+### 2.5 Async AI Features (Career Paths, Job Matches, Roadmap, Interview Prep)
+
+All four async features follow this pattern. Inspect each; fix any that deviate.
+
+```
+POST .../generate/   → 202 { job_id, estimated_seconds }
+GET  /api/v1/jobs/async-status/{job_id}/
+  → while pending: { status: "pending"|"processing", progress: 0-100 }
+  → when done:     { status: "done", result_url: "/api/v1/..." }
+  → on failure:    { status: "failed", error: "Rate limited by Gemini" }
+
+Frontend: polls every 2 s with exponential backoff after 30 s
+         shows real progress bar (not a spinner)
+         on failure: shows user-friendly error — not "Something went wrong"
+```
+
+**Critical — error messages must be user-facing, not stack traces:**
+
+```python
+# backend/apps/ai_jobs/tasks.py
+GEMINI_ERROR_MESSAGES = {
+    429: "AI service is busy. Your request is queued — results arrive in a few minutes.",
+    503: "AI service temporarily unavailable. Retrying automatically.",
+}
+
+def handle_ai_error(job, exc):
+    status_code = getattr(exc.response, "status_code", None) if hasattr(exc, "response") else None
+    job.status = "failed"
+    job.error  = GEMINI_ERROR_MESSAGES.get(status_code, "Processing failed. Try again.")
+    job.save(update_fields=["status", "error"])
+```
+
+**Verification (test each feature):**
+```bash
+# Career paths
+curl -s -X POST http://localhost/api/v1/career-paths/generate/ \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"resume_id":1,"target_role":"Staff Engineer"}' | python3 -m json.tool
+
+# Poll status
+JOB_ID="<from above>"
+curl -s http://localhost/api/v1/jobs/async-status/$JOB_ID/ \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+```
+
+**STOP — all four async features must reach "done" or "failed" within 90 s.**
+
+---
+
+## 3. UI / UX — Mobile-First Requirements
+
+Apply these to every screen. Fix any that violate them.
+
+### 3.1 Responsive Breakpoints
+
+```css
+/* Use these breakpoints everywhere */
+/* Mobile:  < 640px  — single column, bottom nav */
+/* Tablet:  640–1023px — two columns, no sidebar */
+/* Desktop: ≥ 1024px  — sidebar + main content */
+```
+
+### 3.2 Mobile Navigation
+
+```
+Bottom navigation bar (mobile only, position: fixed, bottom: 0):
+  Home  |  Resume  |  Chat  |  Jobs  |  Profile
+
+Each tab:
+  - Min 44px height (touch target)
+  - Icon (24px) + label (11px) stacked vertically
+  - Active state: filled icon + accent color
+  - Badge for unread chat messages
+```
+
+```tsx
+// frontend/src/components/nav/BottomNav.tsx
+const NAV_ITEMS = [
+  { to: "/",        icon: "🏠",  label: "Home"    },
+  { to: "/resume",  icon: "📄",  label: "Resume"  },
+  { to: "/chat",    icon: "💬",  label: "Chat"    },
+  { to: "/jobs",    icon: "💼",  label: "Jobs"    },
+  { to: "/profile", icon: "👤",  label: "Profile" },
+];
+
+// Only rendered on mobile (CSS: display:none at md+)
+export function BottomNav() {
+  return (
+    <nav aria-label="Main navigation"
+         style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 50,
+                  display: "flex", background: "#fff", borderTop: "1px solid #e2e8f0",
+                  paddingBottom: "env(safe-area-inset-bottom)" }}>
+      {NAV_ITEMS.map(item => (
+        <NavLink key={item.to} to={item.to}
+                 style={{ flex: 1, minHeight: 56, display: "flex",
+                          flexDirection: "column", alignItems: "center",
+                          justifyContent: "center", gap: 2, textDecoration: "none",
+                          fontSize: 11, color: "#64748b" }}>
+          <span style={{ fontSize: 22 }}>{item.icon}</span>
+          {item.label}
+        </NavLink>
+      ))}
+    </nav>
+  );
+}
+```
+
+### 3.3 Accessibility Minimums (Non-Negotiable)
+
+Every screen must pass:
+
+- All interactive elements reachable by keyboard (Tab / Shift+Tab)
+- Focus indicators visible (never `outline: none` without a replacement)
+- Colour contrast ≥ 4.5:1 for body text, ≥ 3:1 for large text and icons
+- All images have `alt` text; decorative images have `alt=""`
+- Form fields have associated `<label>` elements (not just placeholders)
+- Error messages use `role="alert"` or `aria-live="polite"`
+- Loading spinners have `aria-label="Loading"` and `role="status"`
+- Modal dialogs trap focus and close on Escape
+- `lang="en"` on the root `<html>` element
+
+**Automated accessibility scan:**
+
+```bash
+cd frontend
+npx axe-cli http://localhost --include="main" 2>&1 | tail -30
+# Target: 0 critical violations, 0 serious violations
+```
+
+### 3.4 Loading States (Fix Any That Are Missing)
+
+Every async operation must have exactly three states visible to the user:
+
+| State      | What to show                                    |
+|------------|-------------------------------------------------|
+| Loading    | Skeleton placeholder or spinner with label      |
+| Success    | The actual data                                 |
+| Error      | Specific error message + a retry action         |
+
+No feature is allowed to show a blank screen while loading, or an empty screen
+on error with no way forward.
+
+### 3.5 Toast Notifications
+
+Use a single toast system (not multiple `alert()` calls):
+
+```typescript
+// Positive: green, 4 s auto-dismiss
+// Error:    red, 6 s auto-dismiss + dismiss button
+// Info:     blue, 4 s auto-dismiss
+// Warning:  amber, stays until dismissed
+
+// Examples of required toasts:
+showToast({ type: "success", message: "Profile updated."                          });
+showToast({ type: "success", message: "Resume uploaded. Parsing in progress…"     });
+showToast({ type: "success", message: "Password changed."                         });
+showToast({ type: "success", message: "Logged out."                               });
+showToast({ type: "error",   message: "Upload failed. Check your connection."     });
+showToast({ type: "error",   message: "Session expired. Signing you back in…"    });
+showToast({ type: "info",    message: "Your career path analysis is ready."       });
+```
+
+---
+
+## 4. Docker Compose — Local Development
+
+```yaml
+# infra/docker-compose.yml
+version: "3.9"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: career_mentor
+      POSTGRES_USER: career_mentor
+      POSTGRES_PASSWORD: devpassword
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U career_mentor"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks: [internal]
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks: [internal]
+
+  ai_service:
+    build: { context: ../ai_service, dockerfile: Dockerfile }
+    env_file: ../ai_service/.env
+    expose: ["8001"]
+    volumes: [../ai_service:/app]
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+
+  backend:
+    build: { context: ../backend, dockerfile: Dockerfile }
+    env_file: ../backend/.env
+    environment:
+      AI_SERVICE_URL: http://ai_service:8001
+      DJANGO_ALLOW_ASYNC_UNSAFE: "true"
+    expose: ["8000"]
+    volumes: [../backend:/app]
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      postgres:   { condition: service_healthy }
+      redis:      { condition: service_healthy }
+      ai_service: { condition: service_healthy }
+
+  celery_worker:
+    build: { context: ../backend, dockerfile: Dockerfile }
+    command: celery -A config worker -l info --concurrency=2
+    env_file: ../backend/.env
+    environment:
+      AI_SERVICE_URL: http://ai_service:8001
+      DJANGO_ALLOW_ASYNC_UNSAFE: "true"
+    volumes: [../backend:/app]
+    networks: [internal]
+    depends_on:
+      postgres:   { condition: service_healthy }
+      redis:      { condition: service_healthy }
+      ai_service: { condition: service_healthy }
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: http://localhost/api/v1
+        VITE_CLOUDINARY_CLOUD_NAME: ${VITE_CLOUDINARY_CLOUD_NAME}
+        VITE_CLOUDINARY_UPLOAD_PRESET: ${VITE_CLOUDINARY_UPLOAD_PRESET}
+        VITE_CLOUDINARY_AVATAR_PRESET: ${VITE_CLOUDINARY_AVATAR_PRESET}
+    expose: ["80"]          # NOT published — only Nginx is on port 80
+    networks: [internal]
+    depends_on:
+      backend: { condition: service_healthy }
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports: ["80:80"]        # the only public entry point
+    volumes: [./nginx/nginx.dev.conf:/etc/nginx/conf.d/default.conf:ro]
+    networks: [internal]
+    depends_on: [backend, frontend]
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  pgdata:
+```
+
+---
+
+## 5. Environment Variables (`.env.example`)
+
+```bash
+# .env.example — monorepo root
+# Copy to .env and fill in every value. Never commit .env.
+
+# ── Django backend ──────────────────────────────────────────────────────────
+DJANGO_SETTINGS_MODULE=config.settings.prod
+SECRET_KEY=                      # python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
+DEBUG=False
+ALLOWED_HOSTS=api.yourdomain.com,backend
+CORS_ALLOWED_ORIGINS=https://yourdomain.com
+DATABASE_URL=postgres://career_mentor:CHANGE_ME@postgres:5432/career_mentor
+REDIS_URL=redis://redis:6379/0
+AI_SERVICE_URL=http://ai_service:8001
+AI_SERVICE_SHARED_SECRET=        # openssl rand -hex 32
+JWT_ACCESS_TOKEN_LIFETIME_MIN=15
+JWT_REFRESH_TOKEN_LIFETIME_DAYS=7
+DJANGO_ALLOW_ASYNC_UNSAFE=true
+FRONTEND_URL=https://yourdomain.com
+PASSWORD_RESET_TIMEOUT_SECONDS=3600
+SENTRY_DSN=
+EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+EMAIL_HOST=smtp.sendgrid.net
+EMAIL_PORT=587
+EMAIL_USE_TLS=True
+EMAIL_HOST_USER=apikey
+EMAIL_HOST_PASSWORD=             # SendGrid / Resend / Mailgun API key
+DEFAULT_FROM_EMAIL=noreply@yourdomain.com
+
+# ── FastAPI AI service ──────────────────────────────────────────────────────
+GOOGLE_API_KEY=                  # from Google AI Studio
+GEMINI_DEFAULT_MODEL=gemini-2.5-flash
+GEMINI_FALLBACK_MODEL=gemini-2.5-flash-lite
+GEMINI_RPM_LIMIT=15
+LANGFUSE_PUBLIC_KEY=
+LANGFUSE_SECRET_KEY=
+LANGFUSE_HOST=http://langfuse:3001
+LOG_LEVEL=INFO
+
+# ── Cloudinary (shared by backend and frontend) ─────────────────────────────
+CLOUDINARY_CLOUD_NAME=
+CLOUDINARY_API_KEY=
+CLOUDINARY_API_SECRET=           # server-side only — never expose to browser
+CLOUDINARY_UPLOAD_PRESET=        # unsigned preset: pdf/docx only, max 5 MB
+CLOUDINARY_AVATAR_PRESET=        # unsigned preset: images only, max 2 MB
+
+# ── React frontend (build-time — safe to embed in bundle) ───────────────────
+VITE_API_BASE_URL=https://api.yourdomain.com/api/v1
+VITE_CLOUDINARY_CLOUD_NAME=      # same as CLOUDINARY_CLOUD_NAME
+VITE_CLOUDINARY_UPLOAD_PRESET=   # same as CLOUDINARY_UPLOAD_PRESET
+VITE_CLOUDINARY_AVATAR_PRESET=   # same as CLOUDINARY_AVATAR_PRESET
+VITE_SENTRY_DSN=                 # optional; leave blank to disable
+```
+
+---
+
+## 6. End-to-End Manual Test Checklist
+
+Run all 8 flows against the full Docker stack (not Vite dev server).
+Tick each box only after watching it succeed with your own eyes.
+
+### 6.1 Auth & Profile
+```
+[ ] Register new account → access token in body, refresh cookie set in DevTools
+[ ] Login → same
+[ ] View profile → GET /me/ returns all fields
+[ ] Edit name, bio, location → PATCH /me/ → changes visible immediately in UI
+[ ] Upload avatar → image appears in navbar and profile page
+[ ] Change password → old password rejected, new password accepted
+[ ] Forgot password → email arrives (check spam), reset link works, redirects to login
+[ ] Logout → refresh token cookie cleared, /me/ returns 401, redirect to /login
+[ ] Login again → works with new session
+[ ] Delete account (with password confirm) → 204, redirect to /login, cannot log in again
+```
+
+### 6.2 Resume
+```
+[ ] Upload .pdf ≤ 5 MB → 201, status transitions uploaded → processing → parsed
+[ ] Upload .docx ≤ 5 MB → same
+[ ] Upload .exe → rejected with clear error message (frontend + backend)
+[ ] Upload 6 MB PDF → rejected with clear error message (frontend + backend)
+[ ] View resume analysis → skills, experience, suggestions rendered
+[ ] Delete resume → removed from list, Cloudinary object deleted
+```
+
+### 6.3 Chat
+```
+[ ] Create new chat session → 201 with session ID
+[ ] Send message → tokens stream progressively (watch in DevTools → Network → EventStream)
+[ ] Tokens render word-by-word in the UI — not in one block at the end
+[ ] Chat history persists after page reload
+[ ] Long message (4001 chars) → rejected with error toast before sending
+[ ] Send second message → context from first message is included
+```
+
+### 6.4 Async AI Features
+```
+[ ] Generate career paths  → polling shows progress → results render
+[ ] Generate job matches   → same
+[ ] Generate learning roadmap → same
+[ ] Generate interview questions for a role → same
+[ ] Gemini rate limit hit  → shows "AI service is busy" message, not a crash
+```
+
+### 6.5 Mobile (Resize browser to 375px width)
+```
+[ ] Bottom nav visible with 5 tabs, all ≥ 44px touch targets
+[ ] No horizontal scroll on any page
+[ ] Chat input stays above keyboard (use iOS Safari / Android Chrome)
+[ ] Avatar upload works on mobile (camera roll accessible)
+[ ] Profile form fields usable on mobile keyboard
+[ ] All modals / drawers close on backdrop click and Escape
+```
+
+**STOP — every box must be ticked before declaring integration complete.**
+
+---
+
+## 7. GitHub Actions CI
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main, staging]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend — lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run type-check
+      - run: npm run test -- --run
+      - run: npm run build
+        env:
+          VITE_API_BASE_URL: https://api.example.com/api/v1
+          VITE_CLOUDINARY_CLOUD_NAME: test
+          VITE_CLOUDINARY_UPLOAD_PRESET: test_preset
+          VITE_CLOUDINARY_AVATAR_PRESET: test_avatar_preset
+      - name: No secrets in bundle
+        run: grep -rn "SECRET\|PASSWORD\|API_KEY" dist/ && exit 1 || echo "Clean"
+      - name: No hardcoded localhost in source
+        run: grep -rn "localhost:8000\|localhost:8001" src/ && exit 1 || echo "Clean"
+
+  backend:
+    name: Backend — lint, typecheck, test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: career_mentor_test
+          POSTGRES_USER: career_mentor
+          POSTGRES_PASSWORD: testpassword
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-retries 5
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: postgres://career_mentor:testpassword@localhost:5432/career_mentor_test
+      REDIS_URL: redis://localhost:6379/0
+      DJANGO_SETTINGS_MODULE: config.settings.test
+      SECRET_KEY: ci-test-secret-key-not-used-in-production
+      AI_SERVICE_URL: http://localhost:8001
+      AI_SERVICE_SHARED_SECRET: ci-test-hmac-secret
+      DJANGO_ALLOW_ASYNC_UNSAFE: "true"
+      CLOUDINARY_CLOUD_NAME: test
+      CLOUDINARY_API_KEY: test
+      CLOUDINARY_API_SECRET: test
+      EMAIL_BACKEND: django.core.mail.backends.locmem.EmailBackend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements/dev.txt
+      - run: pip install -r requirements/dev.txt
+      - run: ruff check .
+      - run: mypy .
+      - run: pytest --tb=short -q --cov=. --cov-report=term-missing
+      - run: pip-audit
+
+  ai_service:
+    name: AI service — lint, typecheck, test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: career_mentor_test
+          POSTGRES_USER: career_mentor
+          POSTGRES_PASSWORD: testpassword
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 5
+    defaults:
+      run:
+        working-directory: ai_service
+    env:
+      DATABASE_URL: postgresql+asyncpg://career_mentor:testpassword@localhost:5432/career_mentor_test
+      GOOGLE_API_KEY: ci-placeholder
+      AI_SERVICE_SHARED_SECRET: ci-test-hmac-secret
+      LANGFUSE_PUBLIC_KEY: ci-placeholder
+      LANGFUSE_SECRET_KEY: ci-placeholder
+      LANGFUSE_HOST: http://localhost:3001
+      CLOUDINARY_CLOUD_NAME: ci-placeholder
+      CLOUDINARY_API_KEY: ci-placeholder
+      CLOUDINARY_API_SECRET: ci-placeholder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: ai_service/requirements.txt
+      - run: pip install -r requirements.txt
+      - run: ruff check .
+      - run: mypy .
+      - run: pytest --tb=short -q
+      - run: pip-audit
+
+  docker-build:
+    name: Docker — all images build
+    runs-on: ubuntu-latest
+    needs: [frontend, backend, ai_service]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: frontend
+          push: false
+          build-args: |
+            VITE_API_BASE_URL=https://api.example.com/api/v1
+            VITE_CLOUDINARY_CLOUD_NAME=test
+            VITE_CLOUDINARY_UPLOAD_PRESET=test
+            VITE_CLOUDINARY_AVATAR_PRESET=test
+      - name: Build backend
+        uses: docker/build-push-action@v5
+        with: { context: backend, push: false }
+      - name: Build ai_service
+        uses: docker/build-push-action@v5
+        with: { context: ai_service, push: false }
+```
+
+---
+
+## 8. Security Checklist (Complete Before Declaring Done)
+
+All items must be green. No exceptions.
+
+```
+[ ] AI_SERVICE_SHARED_SECRET never appears in any log (grep both Django and FastAPI logs)
+[ ] GOOGLE_API_KEY never appears in any log
+[ ] ai_service has no published port in docker-compose.prod.yml — internal network only
+[ ] Refresh cookie: HttpOnly + Secure + SameSite=None in production
+[ ] grep -r "SECRET\|PASSWORD\|API_KEY" frontend/dist/ → zero matches
+[ ] Django DEBUG=False in production
+[ ] Forgot password response is identical whether email exists or not
+[ ] Password reset tokens expire after 1 hour and are single-use
+[ ] Avatar URL validated to belong to our Cloudinary cloud before saving
+[ ] File upload validates type AND size on both frontend (UX) and backend (security)
+[ ] CORS_ALLOWED_ORIGINS is read from env, not hardcoded
+[ ] npm audit → zero critical, zero high
+[ ] pip-audit → zero critical, zero high (backend and ai_service)
+[ ] make prod-config → valid compose, no bind mounts, ai_service on internal network
+[ ] No TODO / FIXME / stub comments in integration code
+```
+
+---
+
+## 9. Definition of Done
+
+Integration is complete when every single item below is true.
+Do not declare done until all are green.
+
+```
+[ ] make up from a clean checkout brings all services healthy in < 3 minutes
+[ ] All 8 manual test flows in Section 6 pass end-to-end through the container stack
+[ ] Chat tokens render progressively (confirmed in DevTools → EventStream)
+[ ] Profile section complete: view, edit, avatar, password change, forgot password,
+    logout, theme preference, notification settings, delete account
+[ ] All pages render correctly at 375px width with no horizontal scroll
+[ ] make test passes in < 5 minutes with zero real Gemini API calls
+[ ] All CI jobs pass on a fresh branch push
+[ ] All security checklist items are ticked
+[ ] No AI scaffolding files in the repo
+[ ] No TODO / stub / placeholder in integration code
+[ ] git log --oneline shows incremental commits — not a single "add everything" commit
+```
