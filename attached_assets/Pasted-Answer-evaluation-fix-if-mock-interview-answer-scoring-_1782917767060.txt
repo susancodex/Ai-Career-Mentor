@@ -1,0 +1,63 @@
+Answer evaluation fix (if mock-interview answer scoring exists in the product):
+
+python# ai_service/services/answer_evaluator.py
+async def evaluate_answer(question: str, user_answer: str, question_type: str) -> dict:
+    if len(user_answer.strip()) < 10:
+        return {
+            "score": 0,
+            "feedback": "Your answer is too short to evaluate. Try giving a complete response.",
+            "strengths": [],
+            "improvements": ["Provide a fuller answer with specific examples."],
+        }
+
+    prompt = f"""Evaluate this interview answer honestly and specifically.
+
+QUESTION: {question}
+QUESTION TYPE: {question_type}
+CANDIDATE'S ANSWER: {user_answer}
+
+Score 0-100 based on: relevance to the question, specificity (concrete examples
+vs vague claims), structure (e.g. STAR method for behavioral questions), and
+clarity. Do not default to a high score — most first-attempt answers in real
+interviews score 40-70. Give honest, actionable feedback.
+
+Return strict JSON: {{ score, feedback, strengths: [...], improvements: [...] }}
+"""
+    response = await model.generate_content_async(prompt)
+    return parse_structured_json(response.text)
+
+Verification:
+
+bash# Generate questions for two different roles using the SAME resume
+curl -s -X POST http://localhost/api/v1/interview/generate/ \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"resume_id":1,"target_role":"Backend Engineer"}' | python3 -m json.tool > /tmp/q_backend.json
+
+curl -s -X POST http://localhost/api/v1/interview/generate/ \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"resume_id":1,"target_role":"Engineering Manager"}' | python3 -m json.tool > /tmp/q_em.json
+
+diff /tmp/q_backend.json /tmp/q_em.json
+# Expect: substantially different question sets
+
+# Confirm resume-specific questions actually exist and reference real resume content
+python3 -c "
+import json
+data = json.load(open('/tmp/q_backend.json'))
+specific = [q for q in data['questions'] if q['type'] == 'resume_specific']
+print(f'{len(specific)} resume-specific questions out of {len(data[\"questions\"])}')
+for q in specific:
+    print(' -', q['question'], '| anchored to:', q.get('anchored_to'))
+"
+# Expect: at least 4-5 resume_specific questions, each anchored_to a real resume detail
+
+# Test answer evaluation with a deliberately weak answer vs a strong one
+curl -s -X POST http://localhost/api/v1/interview/evaluate/ \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"question":"Tell me about a challenging project.","answer":"idk it was fine"}' \
+  | python3 -m json.tool
+# Expect: low score, honest feedback — NOT "Great answer!"
+
+STOP — questions must differ by role, reference real resume content, and answer
+scoring must genuinely vary based on answer quality (not always return ~85).
+

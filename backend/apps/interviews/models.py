@@ -13,9 +13,24 @@ class InterviewSession(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="interview_sessions")
+    # Optional link to the resume used for question generation.
+    # When set, questions are anchored to real resume content; when null the
+    # agent falls back to generic role questions.
+    resume = models.ForeignKey(
+        "resumes.Resume",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="interview_sessions",
+    )
     target_role = models.CharField(max_length=255)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user", "resume", "target_role"]),
+        ]
 
     def __str__(self):
         return f"InterviewSession({self.user.email}, {self.target_role})"
@@ -26,12 +41,15 @@ class InterviewQuestion(models.Model):
         BEHAVIORAL = "behavioral"
         TECHNICAL = "technical"
         SITUATIONAL = "situational"
+        RESUME_SPECIFIC = "resume_specific"
         GENERAL = "general"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     session = models.ForeignKey(InterviewSession, on_delete=models.CASCADE, related_name="questions")
     question_text = models.TextField()
     category = models.CharField(max_length=20, choices=Category.choices, default=Category.GENERAL)
+    # For resume_specific questions: which resume item (project, tech, role) this is anchored to.
+    anchored_to = models.CharField(max_length=500, blank=True, default="")
     user_answer = models.TextField(blank=True)
     ai_feedback = models.TextField(blank=True)
     score = models.FloatField(null=True, blank=True)

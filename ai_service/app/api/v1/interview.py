@@ -21,6 +21,8 @@ async def generate_questions(request: Request, body: InterviewQuestionsRequest):
             target_role=body.target_role,
             session_id=body.session_id,
             agent_session_id=body.session_id,
+            resume_id=body.resume_id,
+            years_experience=body.years_experience,
         )
         return result
     except ValueError as e:
@@ -41,6 +43,7 @@ async def score_answer(request: Request, body: AnswerScoreRequest):
             user_answer=body.user_answer,
             target_role=body.target_role,
             session_id=body.question_id,
+            resume_context=body.resume_context,
         )
         return result
     except ValueError as e:
