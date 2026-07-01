@@ -13,28 +13,61 @@ GEMINI_ERROR_MESSAGES = {
 }
 
 
+class InsufficientDataError(ValueError):
+    """Raised when a resume has no extractable skills — generating paths would
+    produce invented content instead of a real plan.  Fail fast, no retry."""
+
+
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def generate_career_paths(self, user_id: str, resume_id: str, target_role: str = "", job_id: Optional[str] = None):
     """
-    1. Fetches existing_skills from the stored ResumeAnalysis (already computed by the
-       resume parser — no extra AI call needed).
-    2. Passes existing_skills to the AI so path steps never list skills the user
-       already has as "to learn".
-    3. Persists via update_or_create so re-running for the same (user, resume,
-       target_role) returns the same stored result rather than regenerating.
+    1. Guards against empty skills — fails immediately with a user-facing message
+       rather than letting the AI invent plausible-sounding content.
+    2. Fetches current_role and location from the user's Profile so the AI can
+       calibrate paths to this specific person, not a generic profile.
+    3. Persists via update_or_create so the same (user, resume, target_role)
+       always returns the stored row on subsequent requests.
     """
     try:
         resume = Resume.objects.get(pk=resume_id, user_id=user_id)
 
-        # Pull existing_skills from the already-computed ResumeAnalysis — no extra
-        # AI call. If the analysis row is missing the resume is not yet parsed,
-        # which the view guards against, but we degrade gracefully here anyway.
+        # --- Pull all real data from stored rows; no extra AI calls ---
         existing_skills: list[str] = []
+        years_experience: int = 0
         try:
             analysis = ResumeAnalysis.objects.get(resume_id=resume_id)
             existing_skills = analysis.extracted_skills or []
+            years_experience = analysis.years_of_experience or 0
         except ResumeAnalysis.DoesNotExist:
-            logger.warning("No ResumeAnalysis found for resume %s — sending empty existing_skills", resume_id)
+            logger.warning("No ResumeAnalysis for resume %s", resume_id)
+
+        # Hard guard: generating paths without real skills produces invented content.
+        # Surface a clear user-facing error instead of proceeding with garbage input.
+        if not existing_skills:
+            raise InsufficientDataError(
+                "Upload and parse a resume first — career paths require your "
+                "actual current skills to generate a meaningful plan."
+            )
+
+        # Profile fields calibrate the AI to this specific person.
+        current_role: Optional[str] = None
+        location_preference: Optional[str] = None
+        try:
+            from apps.users.models import Profile
+            profile = Profile.objects.get(user_id=user_id)
+            current_role = profile.current_role or None
+            location_preference = profile.location or None
+        except Exception:
+            logger.warning("Could not load profile for user %s — proceeding without location/role", user_id)
+
+        # If current_role not on profile, fall back to most recent work history entry.
+        if not current_role and years_experience:
+            try:
+                work_history = analysis.work_history or []
+                if work_history:
+                    current_role = work_history[0].get("title")
+            except Exception:
+                pass
 
         result = call_ai_service(
             "POST",
@@ -43,11 +76,12 @@ def generate_career_paths(self, user_id: str, resume_id: str, target_role: str =
                 "resume_id": resume_id,
                 "target_role": target_role,
                 "existing_skills": existing_skills,
+                "years_experience": years_experience,
+                "current_role": current_role,
+                "location_preference": location_preference,
             },
         )
 
-        # Persist the full structured result. unique_together(user, resume, target_role)
-        # guarantees stability — the same combination always returns this row.
         CareerPath.objects.update_or_create(
             user_id=user_id,
             resume=resume,
@@ -62,6 +96,20 @@ def generate_career_paths(self, user_id: str, resume_id: str, target_role: str =
             "Career paths persisted for resume=%s target_role=%r (%d path(s))",
             resume_id, target_role, len(result.get("paths", [])),
         )
+
+    except InsufficientDataError as exc:
+        # Not a transient error — do not retry. Surface message to the job record.
+        logger.warning("Career path aborted for resume=%s: %s", resume_id, exc)
+        from apps.jobs.models import AsyncJob
+        try:
+            job = AsyncJob.objects.filter(celery_task_id=self.request.id).first()
+            if job:
+                job.status = AsyncJob.Status.FAILED
+                job.error_message = str(exc)
+                job.save(update_fields=["status", "error_message"])
+        except Exception:
+            pass
+        return  # no retry
 
     except Exception as exc:
         logger.exception("Career path generation failed for resume=%s", resume_id)

@@ -13,12 +13,16 @@ class CareerPathResult(BaseModel):
     paths: List[List[CareerStep]]
     recommended_path_index: int = 0
     summary: str = ""
+    prerequisite_check: str = ""
 
 
 class CareerPathRequest(BaseModel):
     resume_id: str
     target_role: str = ""
     existing_skills: List[str] = Field(default_factory=list)
+    years_experience: int = 0
+    current_role: Optional[str] = None
+    location_preference: Optional[str] = None
 
 
 class SkillGapResult(BaseModel):

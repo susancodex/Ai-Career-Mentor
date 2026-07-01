@@ -39,16 +39,20 @@ Generate 2-3 realistic career paths toward the target role and return ONLY a JSO
     ]
   ],
   "recommended_path_index": 0,
-  "summary": "brief recommendation rationale referencing this candidate's actual background"
+  "summary": "brief recommendation rationale referencing this candidate's actual background",
+  "prerequisite_check": "one sentence: what this person already has that makes this plan achievable, or what is still missing"
 }
 
 CRITICAL RULES:
-1. Calibrate timelines to the candidate's ACTUAL years of experience and work history.
+1. Calibrate timelines to the candidate's ACTUAL years of experience.
    A junior (0-2 yrs) and a senior (10+ yrs) with overlapping skills get different timelines.
 2. required_skills for each step must contain ONLY skills the candidate does NOT already have.
-   Do NOT list any skill from the ALREADY OWNED list provided below.
+   Do NOT list any skill from the ALREADY OWNED list.
 3. reasoning must reference at least one specific item from the candidate's actual work history
-   or skill set — not a generic statement that could apply to any candidate."""
+   or skill set — not a generic statement that could apply to any candidate.
+4. If location_preference is provided, factor in regional job market realities for that location.
+5. prerequisite_check must honestly state whether the candidate is ready to start this path
+   or what concrete gap stands between them and step one."""
 
 
 async def run_skill_gap_agent(
@@ -101,11 +105,13 @@ async def run_career_path_agent(
     skills: List[str],
     target_role: str,
     existing_skills: Optional[List[str]] = None,
+    current_role: Optional[str] = None,
+    location_preference: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> CareerPathResult:
     llm = get_llm(session_id=session_id)
 
-    # Normalise for fast membership check (case-insensitive)
+    # Normalise owned skills for fast, case-insensitive membership check.
     owned = {s.lower() for s in (existing_skills or skills)}
 
     experience_lines = "\n".join(
@@ -118,11 +124,13 @@ async def run_career_path_agent(
         SystemMessage(content=_CAREER_PATH_SYSTEM),
         HumanMessage(
             content=(
-                f"Target role: {target_role}\n\n"
-                f"Years of experience: {years_of_experience}\n\n"
-                f"Work history (data only):\n{experience_lines}\n\n"
-                f"Current skills: {json.dumps(skills)}\n\n"
-                f"ALREADY OWNED (must NOT appear in any required_skills): {json.dumps(list(owned))}"
+                f"CURRENT SKILLS (verified from resume): {json.dumps(skills)}\n"
+                f"ALREADY OWNED — must NOT appear in any required_skills: {json.dumps(list(owned))}\n\n"
+                f"YEARS OF EXPERIENCE: {years_of_experience}\n"
+                f"CURRENT ROLE: {current_role or 'Not specified'}\n"
+                f"TARGET ROLE: {target_role}\n"
+                f"LOCATION PREFERENCE: {location_preference or 'Not specified'}\n\n"
+                f"Work history (data only):\n{experience_lines}"
             )
         ),
     ]

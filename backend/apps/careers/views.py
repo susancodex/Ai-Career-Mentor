@@ -16,12 +16,20 @@ class CareerPathGenerateView(APIView):
 
     def post(self, request):
         resume_id = request.data.get("resume_id")
-        target_role = request.data.get("target_role", "")
+        # Normalize target_role on the way in so "Engineering Manager" and
+        # "  engineering manager  " resolve to the same cached result.
+        target_role = (request.data.get("target_role") or "").strip()
         force_regenerate = request.data.get("force_regenerate", False)
 
         if not resume_id:
             return Response(
                 {"error": {"code": "bad_request", "message": "resume_id is required.", "details": {}}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not target_role:
+            return Response(
+                {"error": {"code": "bad_request", "message": "target_role is required.", "details": {}}},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -33,10 +41,10 @@ class CareerPathGenerateView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Return cached result immediately unless the caller explicitly requests regeneration.
-        # This is the primary mechanism that makes paths stable across requests.
+        # Case-insensitive lookup: "Engineering Manager" and "engineering manager"
+        # must resolve to the same cached row, not create two separate results.
         existing = CareerPath.objects.filter(
-            user=request.user, resume=resume, target_role=target_role
+            user=request.user, resume=resume, target_role__iexact=target_role
         ).first()
 
         if existing and not force_regenerate:
@@ -73,7 +81,7 @@ class SkillGapView(APIView):
         target_role = request.query_params.get("target_role", "")
         qs = SkillGap.objects.filter(user=request.user, resume_id=resume_id)
         if target_role:
-            qs = qs.filter(target_role=target_role)
+            qs = qs.filter(target_role__iexact=target_role)
         obj = qs.order_by("-created_at").first()
         if not obj:
             return Response(

@@ -1,0 +1,96 @@
+Backend fix pattern:
+
+python# ai_service/services/career_path_generator.py
+async def generate_career_path(
+    current_skills: list[str],
+    years_experience: int,
+    current_role: str | None,
+    target_role: str,
+    location_preference: str | None,
+) -> CareerPath:
+    """
+    Every argument here must come from REAL stored data — the resume's
+    extracted_skills, the profile's years_experience, etc. If any of these
+    are placeholder/empty, the generated path must say so rather than
+    inventing plausible-sounding defaults.
+    """
+    if not current_skills:
+        raise InsufficientDataError(
+            "Upload and parse a resume first — career paths require your "
+            "actual current skills to generate a meaningful plan."
+        )
+
+    prompt = f"""Generate a realistic career progression plan for this SPECIFIC person.
+
+CURRENT SKILLS (verified from their resume): {', '.join(current_skills)}
+YEARS OF EXPERIENCE: {years_experience}
+CURRENT ROLE: {current_role or 'Not specified'}
+TARGET ROLE: {target_role}
+LOCATION PREFERENCE: {location_preference or 'Not specified'}
+
+Identify ONLY the skill gaps between their current skills and what {target_role}
+typically requires. Do not list skills they already have as "to learn."
+Provide milestones with realistic timeframes given their actual experience level.
+A person with {years_experience} years should not have the same timeline as
+someone starting from zero.
+
+Return strict JSON: {{ steps: [...], skill_gaps: [...], estimated_timeline_months: int,
+realistic_salary_range: {{min, max, currency}}, prerequisite_check: string }}
+"""
+    response = await model.generate_content_async(prompt)
+    return parse_structured_json(response.text)
+
+Persistence and caching fix:
+
+python# backend/apps/career_paths/models.py
+class CareerPath(models.Model):
+    user        = models.ForeignKey(User, on_delete=models.CASCADE)
+    resume      = models.ForeignKey(Resume, on_delete=models.CASCADE)
+    target_role = models.CharField(max_length=150)
+    result      = models.JSONField()
+    created_at  = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        # Same user + resume + target_role should reuse the existing result
+        # unless explicitly regenerated — prevents "random new answer every click"
+        indexes = [models.Index(fields=["user", "resume", "target_role"])]
+
+# backend/apps/career_paths/views.py
+class GenerateCareerPathView(APIView):
+    def post(self, request):
+        resume_id   = request.data["resume_id"]
+        target_role = request.data["target_role"].strip()
+        force_regenerate = request.data.get("force_regenerate", False)
+
+        existing = CareerPath.objects.filter(
+            user=request.user, resume_id=resume_id, target_role__iexact=target_role
+        ).order_by("-created_at").first()
+
+        if existing and not force_regenerate:
+            return Response(CareerPathSerializer(existing).data, status=200)
+
+        # ... fire async generation job, persist new CareerPath row
+
+Verification:
+
+bash# Same user, two different target roles — paths must differ in skill_gaps and timeline
+curl -s -X POST http://localhost/api/v1/career-paths/generate/ \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"resume_id":1,"target_role":"Engineering Manager"}' | python3 -m json.tool > /tmp/path_em.json
+
+curl -s -X POST http://localhost/api/v1/career-paths/generate/ \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"resume_id":1,"target_role":"Data Scientist"}' | python3 -m json.tool > /tmp/path_ds.json
+
+diff /tmp/path_em.json /tmp/path_ds.json
+# Expect: skill_gaps, steps, timeline substantially different — EM path should NOT
+# ask this frontend dev to "learn pandas and scikit-learn" generically
+
+# Re-request the SAME target role without force_regenerate — must return the same result
+curl -s -X POST http://localhost/api/v1/career-paths/generate/ \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"resume_id":1,"target_role":"Engineering Manager"}' | python3 -m json.tool > /tmp/path_em_2.json
+diff /tmp/path_em.json /tmp/path_em_2.json
+# Expect: identical (cached, not regenerated)
+
+STOP — paths must vary by real input and be stable when re-requested without forcing regeneration.
