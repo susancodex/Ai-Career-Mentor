@@ -11,7 +11,7 @@ from apps.resumes.models import Resume
 from core.tasks import safe_apply_async
 from .models import JobMatch, AsyncJob
 from .serializers import JobMatchSerializer, AsyncJobSerializer
-from .tasks import generate_job_matches
+from .tasks import refresh_job_matches
 
 
 class JobMatchGenerateView(APIView):
@@ -33,7 +33,7 @@ class JobMatchGenerateView(APIView):
             )
         job_id = str(uuid.uuid4())
         safe_apply_async(
-            generate_job_matches,
+            refresh_job_matches,
             args=[str(request.user.id), str(resume_id)],
             task_id=job_id,
         )
@@ -44,7 +44,7 @@ class JobMatchListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        matches = JobMatch.objects.filter(user=request.user).order_by("-created_at")
+        matches = JobMatch.objects.filter(user=request.user).order_by("-overall_score", "-created_at")
         return Response(JobMatchSerializer(matches, many=True).data)
 
 
@@ -83,7 +83,6 @@ class AsyncJobStatusView(APIView):
             if result.state == "SUCCESS":
                 return Response({"status": "done", "result": result.result})
             elif result.state in ("FAILURE", "REVOKED"):
-                # Check if we have a stored error message
                 try:
                     job = AsyncJob.objects.filter(celery_task_id=job_id).first()
                     if job and job.error_message:

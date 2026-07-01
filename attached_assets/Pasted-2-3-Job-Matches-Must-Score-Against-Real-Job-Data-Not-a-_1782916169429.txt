@@ -1,0 +1,85 @@
+2.3 Job Matches — Must Score Against Real Job Data, Not a Fixed List
+
+How to tell it's fake: The same 5-10 "matched jobs" appear for every user
+regardless of skills, or the match percentages are randomly generated client-side
+with Math.random(), or there's no actual job source — just a hardcoded array of
+job titles with fake company names.
+
+What "real" looks like — pick ONE real data source and wire it properly:
+
+Option A (recommended for a sellable product): Integrate a real job board API
+  - Adzuna API, JSearch (RapidAPI), USAJobs API, LinkedIn Jobs API (if you have
+    partner access), or Indeed Publisher API
+  - Real listings, real companies, real apply links, refreshed on a schedule
+
+Option B (acceptable fallback if no job API budget yet): Maintain your own
+  job_postings table, populated by a scheduled scraper/ingestion job that pulls
+  from public company career pages or a job feed — NOT typed in by hand as
+  fixture data and left static forever
+
+Either way: matching logic must be real — actual skill overlap, actual
+experience-level fit, NOT a random percentage.
+
+Backend fix pattern (real matching logic, independent of which data source you pick):
+
+python# backend/apps/jobs/matching.py
+def compute_match_score(user_skills: set[str], job_required_skills: set[str],
+                         user_years: int, job_min_years: int, job_max_years: int) -> dict:
+    """
+    Deterministic, explainable scoring — same inputs always produce the same
+    score. No randomness anywhere in this function.
+    """
+    if not job_required_skills:
+        skill_overlap_pct = 0.0
+    else:
+        overlap = user_skills & job_required_skills
+        skill_overlap_pct = len(overlap) / len(job_required_skills)
+
+    if job_min_years <= user_years <= job_max_years:
+        experience_fit = 1.0
+    elif user_years < job_min_years:
+        experience_fit = max(0.0, 1 - (job_min_years - user_years) * 0.15)
+    else:
+        experience_fit = max(0.0, 1 - (user_years - job_max_years) * 0.05)
+
+    overall_score = round((skill_overlap_pct * 0.7 + experience_fit * 0.3) * 100)
+    matched_skills   = sorted(user_skills & job_required_skills)
+    missing_skills   = sorted(job_required_skills - user_skills)
+
+    return {
+        "overall_score": overall_score,
+        "matched_skills": matched_skills,
+        "missing_skills": missing_skills,
+        "experience_fit_pct": round(experience_fit * 100),
+    }
+
+python# backend/apps/jobs/tasks.py
+@shared_task
+def refresh_job_matches(user_id: int, resume_id: int):
+    user_profile = UserProfile.objects.get(user_id=user_id)
+    analysis     = ResumeAnalysis.objects.get(resume_id=resume_id)
+    user_skills  = set(s.lower() for s in analysis.extracted_skills)
+
+    # Pull from REAL job source — adjust to whichever integration you picked
+    listings = job_board_client.search(
+        keywords=user_profile.preferred_roles or [analysis.inferred_title],
+        location=user_profile.location,
+    )
+
+    JobMatch.objects.filter(user_id=user_id).delete()  # clear stale matches
+    for listing in listings:
+        score = compute_match_score(
+            user_skills=user_skills,
+            job_required_skills=set(s.lower() for s in listing.required_skills),
+            user_years=analysis.years_of_experience,
+            job_min_years=listing.min_years or 0,
+            job_max_years=listing.max_years or 99,
+        )
+        JobMatch.objects.create(
+            user_id=user_id,
+            external_job_id=listing.id,
+            title=listing.title,
+            company=listing.company,
+            apply_url=listing.apply_url,           # must be a REAL clickable apply link
+            **score,
+        )
