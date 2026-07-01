@@ -1,0 +1,59 @@
+2.4 Interview Questions — Must Be Role- and Resume-Specific, Not a Static Bank
+
+How to tell it's fake: Generating interview questions for "Software Engineer" and
+"Product Manager" returns the same or near-identical question set, or the questions
+never reference anything from the user's actual resume (no "tell me about your
+experience with X" where X is a real thing from their work history).
+
+What "real" looks like:
+
+1. At least 30-40% of generated questions should be directly traceable to specific
+   items in the user's resume (a project, a technology, a role transition)
+2. Remaining questions should be genuinely role-appropriate (behavioral + technical
+   mix calibrated to seniority level from years_of_experience)
+3. Answer evaluation (if the product supports mock-interview mode) must actually
+   assess the user's typed/spoken answer against the question — not return a
+   canned "Good answer!" regardless of content
+4. Question sets persist per (resume, target_role) so revisiting doesn't silently
+   reshuffle into a different deck mid-practice session
+
+Backend fix pattern:
+
+python# ai_service/services/interview_question_generator.py
+async def generate_interview_questions(
+    resume_text: str,
+    work_history: list[dict],
+    target_role: str,
+    years_experience: int,
+) -> list[InterviewQuestion]:
+    work_history_summary = "\n".join(
+        f"- {w['title']} at {w['company']} ({w['start_date']}–{w['end_date']})"
+        for w in work_history
+    )
+    seniority = (
+        "entry-level (0-2 years)" if years_experience <= 2 else
+        "mid-level (3-6 years)" if years_experience <= 6 else
+        "senior/staff (7+ years)"
+    )
+
+    prompt = f"""Generate 12 interview questions for a {seniority} candidate
+applying for {target_role}.
+
+THEIR ACTUAL WORK HISTORY:
+{work_history_summary}
+
+FULL RESUME CONTEXT:
+{resume_text[:3000]}
+
+Requirements:
+- At least 5 questions must reference SPECIFIC items from their work history above
+  (a named project, technology, company, or transition) — not generic phrasing
+- Remaining questions should be standard {target_role} behavioral/technical
+  questions calibrated to {seniority}
+- Tag each question with type: "resume_specific" | "behavioral" | "technical"
+- For resume_specific questions, include which resume detail it's anchored to
+
+Return strict JSON: [{{ question, type, anchored_to (nullable), difficulty }}]
+"""
+    response = await model.generate_content_async(prompt)
+    return parse_structured_json(response.text)
