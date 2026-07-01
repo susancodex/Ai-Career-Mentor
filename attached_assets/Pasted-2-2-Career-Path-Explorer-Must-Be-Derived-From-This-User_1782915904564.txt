@@ -1,0 +1,61 @@
+2.2 Career Path Explorer — Must Be Derived From This User's Actual Profile/Resume
+
+How to tell it's fake: Two users with very different resumes (or the same user
+selecting two different target roles) get the same or near-identical career path
+steps, same milestones, same timelines.
+
+What "real" looks like:
+
+1. Input to the AI must include: current role/skills from the parsed resume,
+   stated target role, years of experience, and any explicit preferences
+   (industry, location, remote/onsite) from the profile
+2. Output paths must reference REAL skill gaps computed by comparing the user's
+   extracted_skills against a target-role skill requirement set — not a
+   generic "learn to code" timeline
+3. Each path step should be checkable against the user's actual current state:
+   if the user already has a skill, it should NOT appear as a "to learn" step
+4. Paths persist per (user, resume, target_role) combination — selecting the
+   same combination again should not silently regenerate a different result
+   unless the user explicitly requests regeneration
+
+Backend fix pattern:
+
+python# ai_service/services/career_path_generator.py
+async def generate_career_path(
+    current_skills: list[str],
+    years_experience: int,
+    current_role: str | None,
+    target_role: str,
+    location_preference: str | None,
+) -> CareerPath:
+    """
+    Every argument here must come from REAL stored data — the resume's
+    extracted_skills, the profile's years_experience, etc. If any of these
+    are placeholder/empty, the generated path must say so rather than
+    inventing plausible-sounding defaults.
+    """
+    if not current_skills:
+        raise InsufficientDataError(
+            "Upload and parse a resume first — career paths require your "
+            "actual current skills to generate a meaningful plan."
+        )
+
+    prompt = f"""Generate a realistic career progression plan for this SPECIFIC person.
+
+CURRENT SKILLS (verified from their resume): {', '.join(current_skills)}
+YEARS OF EXPERIENCE: {years_experience}
+CURRENT ROLE: {current_role or 'Not specified'}
+TARGET ROLE: {target_role}
+LOCATION PREFERENCE: {location_preference or 'Not specified'}
+
+Identify ONLY the skill gaps between their current skills and what {target_role}
+typically requires. Do not list skills they already have as "to learn."
+Provide milestones with realistic timeframes given their actual experience level.
+A person with {years_experience} years should not have the same timeline as
+someone starting from zero.
+
+Return strict JSON: {{ steps: [...], skill_gaps: [...], estimated_timeline_months: int,
+realistic_salary_range: {{min, max, currency}}, prerequisite_check: string }}
+"""
+    response = await model.generate_content_async(prompt)
+    return parse_structured_json(response.text)
