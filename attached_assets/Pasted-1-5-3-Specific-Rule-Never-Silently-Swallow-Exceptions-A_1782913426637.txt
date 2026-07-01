@@ -1,0 +1,209 @@
+1.5.3 Specific Rule: Never Silently Swallow Exceptions
+
+A repeated vibe-coding tell across this codebase type is a bare except: pass
+or except Exception: return None added to make an error disappear from the
+console rather than to handle it correctly. Audit every exception handler touched
+in this pass against this rule:
+
+python# WRONG — vibe-coded "fix" that hides the real problem
+try:
+    result = call_ai_service(payload)
+except Exception:
+    pass   # silently continues with no result — feature now looks "fixed"
+           # because it no longer crashes, but it also does nothing
+
+# RIGHT — the failure is real, so it is surfaced as a real failure state
+try:
+    result = call_ai_service(payload)
+except httpx.TimeoutException:
+    job.status = "failed"
+    job.error = "AI service timed out. Try again."
+    job.save(update_fields=["status", "error"])
+    return
+except httpx.HTTPStatusError as e:
+    job.status = "failed"
+    job.error = GEMINI_ERROR_MESSAGES.get(e.response.status_code, "Processing failed.")
+    job.save(update_fields=["status", "error"])
+    return
+
+The only acceptable bare except blocks in this codebase are the ones already
+explicitly justified in this prompt (e.g. best-effort Cloudinary cleanup in
+2.2.1, where a failed delete should not block account deletion) — and those are
+commented with the specific reason, not used as a generic catch-all.
+
+1.5.4 Specific Rule: Never Guess a Data Contract — Always Read Both Sides
+
+Before editing any frontend code that calls a backend endpoint, or any backend
+endpoint consumed by frontend code, read both sides of the contract in the same
+sitting:
+
+bash# Find the exact request shape the frontend sends
+grep -n "api.post('/me/avatar/'" -A 5 frontend/src/components/profile/AvatarUpload.tsx
+
+# Find the exact request shape the backend expects
+grep -n "class AvatarUploadSerializer" -A 10 backend/apps/users/serializers.py
+
+# These two must match field-for-field. If they don't, that mismatch IS one of
+# the fake/broken things this pass exists to find and fix — do not "fix" it by
+# guessing which side is right; read the actual model to determine ground truth.
+
+1.5.5 Self-Check Before Marking Any Feature in Section 2 as Done
+
+Ask yourself these four questions honestly before moving to the next feature.
+If the answer to any is "not really" or "I assumed," go back.
+
+
+Did I read the full function I edited, not just the lines around my change?
+Did I run the actual verification command and read the actual output, or did
+I infer from the code that it would probably pass?
+If this fix touches a frontend/backend boundary, did I confirm both sides
+agree on the data shape by reading both files, not by assumption?
+Is every line I changed justified by a specific entry in the Section 1
+pre-audit or a specific "how to tell it's fake" check in Section 2 — or did
+I change something just because I was already in the file?
+
+
+
+2. Feature-by-Feature Audit and Repair
+
+For each feature below: read the real call chain, identify the exact fake link,
+replace it, then run the verification with at least two different real inputs
+(not the same demo input every time) and confirm the outputs differ appropriately.
+
+
+2.1 Resume Analysis — Must Reflect the Actual Uploaded Resume
+
+How to tell it's fake: Upload two different resumes (one junior, one senior;
+one in tech, one in marketing) and compare the analysis output. If the skills list,
+strengths, gaps, or suggestions are suspiciously similar or identical, it's fake.
+
+What "real" looks like:
+
+1. Resume file → actually parsed (PDF/DOCX text extraction — pdfplumber / python-docx /
+   mammoth, NOT a hardcoded "extracted_text" string)
+2. Extracted text → sent to the AI model as actual context, not summarized into a
+   generic template before reaching the model
+3. AI prompt includes the FULL resume text (or a real, faithful summary, not a
+   truncated/templated stand-in) plus explicit extraction instructions
+4. AI response is parsed into structured fields (skills, experience years, gaps,
+   ATS issues) and persisted to the database tied to that specific resume_id
+5. Re-fetching GET /api/v1/resumes/{id}/analysis/ after a refresh returns the
+   SAME analysis that was generated — not a freshly re-randomized one
+
+Backend fix pattern (apply only if the current code deviates from this):
+
+python# ai_service/services/resume_parser.py
+import pdfplumber
+from docx import Document as DocxDocument
+
+def extract_text(file_bytes: bytes, content_type: str) -> str:
+    """Real text extraction — must actually read the file, not return a stub."""
+    if "pdf" in content_type:
+        text_chunks = []
+        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+            for page in pdf.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text_chunks.append(page_text)
+        text = "\n".join(text_chunks)
+    elif "wordprocessingml" in content_type or "docx" in content_type:
+        doc = DocxDocument(io.BytesIO(file_bytes))
+        text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+    else:
+        raise ValueError(f"Unsupported file type: {content_type}")
+
+    if len(text.strip()) < 50:
+        # A "successfully parsed" empty/near-empty result is itself a dummy outcome —
+        # surface it as a real failure so the user can fix their upload.
+        raise ResumeParsingError(
+            "Could not extract readable text from this file. "
+            "It may be a scanned image — try a text-based PDF or DOCX."
+        )
+    return text
+
+
+# ai_service/services/resume_analyzer.py
+async def analyze_resume(resume_text: str, target_role: str | None = None) -> ResumeAnalysis:
+    """
+    Sends the FULL extracted resume text to the model.
+    No template substitution, no truncation below a safe context limit,
+    no fallback to a generic 'here are common resume tips' response.
+    """
+    prompt = f"""You are analyzing a real candidate's resume. Extract and assess
+ONLY what is actually present in the text below. Do not invent skills, companies,
+or experience that are not stated. If information is missing, say so explicitly
+rather than guessing.
+
+RESUME TEXT:
+---
+{resume_text}
+---
+
+{"TARGET ROLE: " + target_role if target_role else ""}
+
+Return strict JSON with these fields:
+- extracted_skills: list of skills explicitly found in the text
+- years_of_experience: integer, computed from actual date ranges in the text
+- work_history: list of {{company, title, start_date, end_date}} from the text
+- strengths: 3-5 specific observations tied to actual resume content
+- gaps: specific missing elements relevant to the target role (or general
+  best practice if no target role given) — must reference what's actually
+  absent, not generic advice
+- ats_issues: formatting/structure problems found in THIS resume specifically
+- overall_score: integer 0-100 based on the analysis above
+"""
+    response = await model.generate_content_async(prompt)
+    parsed = parse_structured_json(response.text)  # validate against schema, retry once on failure
+    return ResumeAnalysis(**parsed)
+
+Persistence check (apply only if missing):
+
+python# backend/apps/resumes/tasks.py
+@shared_task(bind=True, max_retries=2)
+def parse_and_analyze_resume(self, resume_id: int):
+    resume = Resume.objects.get(id=resume_id)
+    resume.status = "processing"
+    resume.save(update_fields=["status"])
+    try:
+        file_bytes = download_from_cloudinary(resume.cloudinary_url)
+        text = call_ai_service_extract(file_bytes, resume.content_type)
+        analysis = call_ai_service_analyze(text, resume.target_role)
+
+        # REAL persistence — tied to this exact resume, queryable later, stable on refresh
+        ResumeAnalysis.objects.update_or_create(
+            resume=resume,
+            defaults={
+                "extracted_skills": analysis["extracted_skills"],
+                "years_of_experience": analysis["years_of_experience"],
+                "work_history": analysis["work_history"],
+                "strengths": analysis["strengths"],
+                "gaps": analysis["gaps"],
+                "ats_issues": analysis["ats_issues"],
+                "overall_score": analysis["overall_score"],
+                "raw_extracted_text": text,
+            },
+        )
+        resume.status = "parsed"
+        resume.save(update_fields=["status"])
+    except ResumeParsingError as e:
+        resume.status = "failed"
+        resume.error_message = str(e)
+        resume.save(update_fields=["status", "error_message"])
+
+Verification (must use two genuinely different resumes):
+
+bash# Upload resume A (e.g. 2 years experience, frontend dev)
+# Upload resume B (e.g. 12 years experience, engineering manager)
+# Fetch both analyses and diff them
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost/api/v1/resumes/A_ID/analysis/ | python3 -m json.tool > /tmp/analysis_a.json
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost/api/v1/resumes/B_ID/analysis/ | python3 -m json.tool > /tmp/analysis_b.json
+diff /tmp/analysis_a.json /tmp/analysis_b.json
+# Expect: years_of_experience, skills, work_history, strengths, gaps ALL meaningfully different
+
+# Refresh check — fetch the same analysis twice, confirm it's identical (stable, not re-randomized)
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost/api/v1/resumes/A_ID/analysis/ > /tmp/run1.json
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost/api/v1/resumes/A_ID/analysis/ > /tmp/run2.json
+diff /tmp/run1.json /tmp/run2.json
+# Expect: NO diff
+
+STOP — analyses must differ meaningfully across resumes AND stay stable across refreshes.

@@ -68,6 +68,19 @@ def analyze_resume(self, resume_id: str):
         resume.raw_text = raw_text
         resume.save(update_fields=["file_type", "raw_text", "updated_at"])
 
+        # Guard: if extraction produced no meaningful text the AI will hallucinate.
+        # Do NOT retry — the file content is the problem, not a transient error.
+        if len(raw_text.strip()) < 50:
+            resume.status = Resume.Status.FAILED
+            resume.error_message = (
+                "Could not extract readable text from this file. "
+                "It may be a scanned image — please upload a text-based PDF or DOCX "
+                "(one where you can select and copy the text)."
+            )
+            resume.save(update_fields=["status", "error_message", "updated_at"])
+            logger.warning("Resume %s has near-empty extracted text (%d chars) — marking failed without retry", resume_id, len(raw_text.strip()))
+            return
+
         # Call AI service (HMAC-signed)
         result = call_ai_service(
             "POST",

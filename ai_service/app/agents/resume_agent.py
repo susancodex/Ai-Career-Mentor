@@ -62,6 +62,15 @@ async def run_resume_agent(
     session_id: Optional[str] = None,
 ) -> ResumeAnalysisResult:
     """Analyse raw resume text and return a validated ResumeAnalysisResult."""
+    # Defense-in-depth: reject empty/near-empty text before touching the model.
+    # The Celery task checks this too, but the AI service must not hallucinate
+    # if called directly with bad input.
+    if not raw_text or len(raw_text.strip()) < 50:
+        raise ValueError(
+            f"resume_id={resume_id}: raw_text is too short ({len(raw_text.strip())} chars) "
+            "to analyze. Extraction must have failed upstream."
+        )
+
     llm = get_llm(session_id=session_id)
 
     messages = [

@@ -55,7 +55,8 @@ export interface ResumeAnalysis {
   extracted_experience: {
     title: string;
     company: string;
-    duration: string;
+    start_date: string | null;
+    end_date: string | null;
     description: string;
   }[];
   summary: string;

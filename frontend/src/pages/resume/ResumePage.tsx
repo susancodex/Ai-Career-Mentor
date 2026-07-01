@@ -229,7 +229,9 @@ export function ResumePage() {
                           <div className="w-[calc(100%-2rem)] md:w-[calc(50%-1.5rem)] ml-8 md:ml-0 p-5 rounded-xl border border-slate-100 bg-white shadow-sm group-hover:shadow-md transition-shadow">
                             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-2">
                               <h4 className="font-bold text-slate-900 text-lg">{exp.title}</h4>
-                              <span className="text-sm font-medium text-primary bg-primary/10 px-2.5 py-1 rounded-md w-fit sm:w-auto mt-2 sm:mt-0">{exp.duration}</span>
+                              <span className="text-sm font-medium text-primary bg-primary/10 px-2.5 py-1 rounded-md w-fit sm:w-auto mt-2 sm:mt-0">
+                                {exp.start_date ?? '?'} – {exp.end_date ?? 'Present'}
+                              </span>
                             </div>
                             <p className="text-sm font-medium text-slate-600 mb-3">{exp.company}</p>
                             <p className="text-sm text-slate-500 leading-relaxed">{exp.description}</p>
