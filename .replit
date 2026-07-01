@@ -20,6 +20,7 @@ DEBUG = "True"
 DJANGO_ALLOW_ASYNC_UNSAFE = "true"
 AI_SERVICE_URL = "http://localhost:8001"
 AI_SERVICE_SHARED_SECRET = "dev-shared-secret-change-in-prod"
+VITE_CLOUDINARY_UPLOAD_PRESET = "resume_upload"
 
 [workflows]
 runButton = "Project"
