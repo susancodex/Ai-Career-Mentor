@@ -1,0 +1,131 @@
+1.5 Anti-Vibe-Coding Discipline — Required for Every Edit in This Pass
+
+This section turns "no vibe coding" from a slogan into a procedure you actually
+follow on every single change in Section 2. Read it once now; apply it on every edit.
+
+1.5.1 The Change-Log Requirement
+
+For every fix you make in Section 2, write a short entry — in your own working
+notes, a CHANGES.md in the repo, or your PR description — using this exact
+structure before you consider the fix done:
+
+FILE:      <exact path>
+FUNCTION:  <exact function/component name>
+BEFORE:    <what it actually did, confirmed by reading the code — quote the
+            specific line(s) that prove it, not a paraphrase from memory>
+WHY FAKE:  <which specific bullet from Section 1.5.2 below applies, and why —
+            not "seemed off">
+FIX:       <the specific change made>
+VERIFIED:  <the exact command run + the exact relevant output, or for UI-only
+            changes, the exact steps taken and what was observed>
+
+If you cannot honestly fill in BEFORE with a quoted line from the actual file,
+you have not read the file closely enough yet — stop and read it before editing.
+If you cannot fill in VERIFIED with a real command output, the fix is not done,
+regardless of whether the code "looks right."
+
+This log is also what you hand to a technical evaluator if asked "how do I know
+this isn't just AI-generated code that was never actually checked?" — it is your
+evidence trail.
+
+1.5.2 Concrete Vibe-Coding Anti-Patterns to Watch Yourself For
+
+These are the specific failure modes that produce code which compiles, renders,
+and demos fine, but is not actually correct. Catch yourself doing any of these
+mid-edit and stop.
+
+
+Pattern-matching instead of understanding. Writing try/except: pass around
+a call because that's what similar code nearby does, without understanding what
+exception could actually be raised or whether silently swallowing it is correct
+here. (It usually isn't — see 1.5.3.)
+Plausible-sounding field names. Writing resume.parsed_skills in a frontend
+type or backend serializer because it sounds like it should exist, without
+grep-checking the actual model/migration to confirm the field is really called
+that.
+Copy-adjust-pray. Taking a working function from Feature A, pasting it for
+Feature B, changing the obvious variable names, and assuming the rest still
+applies — without checking whether Feature B's data shape, auth requirements,
+or edge cases actually match Feature A's.
+Test-shaped, not behavior-shaped, fixes. Adjusting code until the specific
+curl command in the verification step returns 200, without considering whether
+the underlying feature is now actually correct for inputs the verification
+command didn't happen to test.
+Confidence inflation in comments. Writing # This handles all edge cases
+or # Fully tested above code that was not, in fact, tested against edge
+cases — comments asserting correctness are not a substitute for verification
+and should never be added unless the verification was actually run.
+Silent scope creep. Starting to fix one fake feature and, mid-edit, also
+"cleaning up" unrelated code nearby because it looked improvable. This violates
+the minimum-diff principle (Rule 2) and makes the change log dishonest, because
+now the diff contains untested, unverified changes mixed in with verified ones.
+Trusting the AI model's first output as ground truth. When wiring an AI
+service node (resume analyzer, skill gap, etc.), the first JSON response that
+parses without error is not automatically a correct response — confirm the
+actual field values make sense for the actual input before treating the
+integration as done.
+
+
+1.5.3 Specific Rule: Never Silently Swallow Exceptions
+
+A repeated vibe-coding tell across this codebase type is a bare except: pass
+or except Exception: return None added to make an error disappear from the
+console rather than to handle it correctly. Audit every exception handler touched
+in this pass against this rule:
+
+python# WRONG — vibe-coded "fix" that hides the real problem
+try:
+    result = call_ai_service(payload)
+except Exception:
+    pass   # silently continues with no result — feature now looks "fixed"
+           # because it no longer crashes, but it also does nothing
+
+# RIGHT — the failure is real, so it is surfaced as a real failure state
+try:
+    result = call_ai_service(payload)
+except httpx.TimeoutException:
+    job.status = "failed"
+    job.error = "AI service timed out. Try again."
+    job.save(update_fields=["status", "error"])
+    return
+except httpx.HTTPStatusError as e:
+    job.status = "failed"
+    job.error = GEMINI_ERROR_MESSAGES.get(e.response.status_code, "Processing failed.")
+    job.save(update_fields=["status", "error"])
+    return
+
+The only acceptable bare except blocks in this codebase are the ones already
+explicitly justified in this prompt (e.g. best-effort Cloudinary cleanup in
+2.2.1, where a failed delete should not block account deletion) — and those are
+commented with the specific reason, not used as a generic catch-all.
+
+1.5.4 Specific Rule: Never Guess a Data Contract — Always Read Both Sides
+
+Before editing any frontend code that calls a backend endpoint, or any backend
+endpoint consumed by frontend code, read both sides of the contract in the same
+sitting:
+
+bash# Find the exact request shape the frontend sends
+grep -n "api.post('/me/avatar/'" -A 5 frontend/src/components/profile/AvatarUpload.tsx
+
+# Find the exact request shape the backend expects
+grep -n "class AvatarUploadSerializer" -A 10 backend/apps/users/serializers.py
+
+# These two must match field-for-field. If they don't, that mismatch IS one of
+# the fake/broken things this pass exists to find and fix — do not "fix" it by
+# guessing which side is right; read the actual model to determine ground truth.
+
+1.5.5 Self-Check Before Marking Any Feature in Section 2 as Done
+
+Ask yourself these four questions honestly before moving to the next feature.
+If the answer to any is "not really" or "I assumed," go back.
+
+
+Did I read the full function I edited, not just the lines around my change?
+Did I run the actual verification command and read the actual output, or did
+I infer from the code that it would probably pass?
+If this fix touches a frontend/backend boundary, did I confirm both sides
+agree on the data shape by reading both files, not by assumption?
+Is every line I changed justified by a specific entry in the Section 1
+pre-audit or a specific "how to tell it's fake" check in Section 2 — or did
+I change something just because I was already in the file?
