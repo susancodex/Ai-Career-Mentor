@@ -62,6 +62,7 @@ async def run_interview_agent(request: InterviewRunRequest, _=Depends(verify_int
     analysis = await get_resume_analysis(request.resume_id)
     state: dict[str, Any] = {
         "user_id": request.resume_id,
+        "resume_id": request.resume_id,
         "resume_text": "",
         "target_role": request.target_role,
         "interview_question": request.question,

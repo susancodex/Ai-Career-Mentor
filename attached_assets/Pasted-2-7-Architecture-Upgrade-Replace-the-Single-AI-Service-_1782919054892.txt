@@ -1,0 +1,97 @@
+2.7 Architecture Upgrade — Replace the Single AI Service with a Real Multi-Agent System
+
+Why this section exists: everything in 2.1–2.6 made each feature individually
+real. This section changes how those features are produced — replacing one
+general-purpose model call per feature with a coordinated team of specialized
+agents under LangGraph. This is not cosmetic. A single prompt asked to "analyze
+this resume" and a single prompt asked to "compare this resume against a target
+role" tend to blur together and repeat the same observations. Separating these
+into distinct agents with distinct responsibilities, explicit handoffs, and a
+shared graph state produces more accurate, more specific, more consistent output
+— and it is also the architecture a technical buyer or hiring evaluator will
+specifically be looking for, since it demonstrates real agent orchestration
+rather than a single wrapped API call relabeled as "AI agents" in the marketing copy.
+
+Audit first: if ai_service/ currently has one model client invoked
+separately per feature (one function for resume analysis, a different function
+for interview questions, etc., each with its own standalone prompt and no shared
+state or handoff), that is the dummy version of "multi-agent" — it's just multiple
+single-purpose prompts with an agent label attached. The real fix below replaces
+that with one LangGraph graph, seven nodes, explicit state, and real handoffs
+between nodes that consume each other's output.
+
+2.7.1 Required Agent Roster and Exact Responsibilities
+
+Each agent below is a distinct LangGraph node with its own system prompt, its own
+narrow tool access, and its own single responsibility. No agent should silently
+absorb another agent's job — if the Career Coach Agent starts generating ATS
+formatting suggestions, that is scope bleed and must be split back out.
+
+📄 Resume Analyzer Agent
+   Input:  raw extracted resume text
+   Output: structured profile { skills, years_experience, work_history,
+           certifications, education, achievements }
+   Tools:  none (pure extraction/reasoning over provided text)
+   Rule:   extracts ONLY what is present in the text — never infers a skill
+           that isn't stated or strongly implied by actual project/role descriptions
+
+🎯 Skill Gap Agent
+   Input:  Resume Analyzer's structured profile + target_role + (optionally)
+           Job Research Agent's current market requirements for that role
+   Output: { matched_skills, missing_skills, transferable_skills,
+             gap_severity: "minor" | "moderate" | "significant" }
+   Tools:  none (pure comparison logic over two structured inputs)
+   Rule:   must reference the ACTUAL target-role requirements gathered by the
+           Job Research Agent when available — not a static internal skill list
+           that goes stale the moment the job market shifts
+
+🧠 Career Coach Agent
+   Input:  structured profile + skill gap output + user's stated goals/preferences
+           (location, timeline, industry) from their profile
+   Output: career path narrative + ranked next-step recommendations + realistic
+           timeline grounded in years_experience
+   Tools:  none directly — synthesizes upstream agent outputs
+   Rule:   does not re-derive skills or gaps itself; it consumes the Skill Gap
+           Agent's output as ground truth rather than re-analyzing the resume
+
+🎤 Interview Coach Agent
+   Input:  structured profile + target_role + (for evaluation mode) the user's
+           typed/spoken answer to a specific question
+   Output: (generation mode) role- and resume-anchored question set;
+           (evaluation mode) { score, feedback, strengths, improvements }
+   Tools:  none
+   Rule:   evaluation must genuinely vary with answer quality — this agent is
+           the one most likely to be left as a fake "always say something nice"
+           stub, so its evaluation output is explicitly covered by the
+           verification in 2.4 above and must be re-run after this refactor
+
+🔍 Job Research Agent
+   Input:  target_role + location_preference
+   Output: { current_market_requirements: [skills], typical_salary_range,
+             real_job_listings: [...], trend_summary }
+   Tools:  Tavily search API and/or Crawl4AI for live web retrieval — this is
+           the ONLY agent permitted to make outbound web calls; this is also
+           where real job-board integration (see 2.3 above) is invoked
+   Rule:   this agent's output is what makes the Skill Gap Agent's comparison
+           current rather than based on the model's stale training data —
+           if this agent is missing or stubbed, every downstream agent that
+           depends on "current market requirements" silently falls back to
+           generic/outdated assumptions, so treat it as a hard dependency,
+           not an optional enhancement
+
+📚 Learning Roadmap Agent
+   Input:  Skill Gap Agent's missing_skills + user's current_level per skill
+   Output: ordered list of { skill, resources: [...], milestones, estimated_weeks }
+   Tools:  may call the Job Research Agent's retrieval tools to find current,
+           real, named learning resources rather than generic platform homepages
+   Rule:   reuses the Skill Gap Agent's gap list as the single source of truth —
+           does not independently recompute what's missing
+
+✍️ ATS Optimization Agent
+   Input:  raw resume text + structured profile + target_role
+   Output: { formatting_issues, keyword_gaps (vs target role requirements),
+             rewritten_bullet_suggestions, ats_compatibility_score }
+   Tools:  none
+   Rule:   keyword_gaps must be cross-checked against the Job Research Agent's
+           current_market_requirements when a target_role is set, not just
+           generic ATS best-practice advice

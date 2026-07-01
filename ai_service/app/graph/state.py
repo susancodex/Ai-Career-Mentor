@@ -4,6 +4,7 @@ from typing import TypedDict, Literal, Optional
 class CareerMentorState(TypedDict, total=False):
     # Inputs
     user_id: str
+    resume_id: Optional[str]
     resume_text: str
     target_role: Optional[str]
     location_preference: Optional[str]
