@@ -96,30 +96,56 @@ _AGENT_SYSTEM_PROMPTS: dict[str, str] = {
     ),
 }
 
+_AGENT_SPECIALTY_ADDENDUM: dict[str, str] = {
+    "resume": (
+        "The user is asking about their resume. Give specific, actionable feedback — "
+        "reference their actual listed roles, skills, or gaps above. Never give generic resume tips."
+    ),
+    "career": (
+        "The user is asking about career development. Reference their actual background, "
+        "target role, and skill gaps above. Suggest concrete next steps grounded in their data."
+    ),
+    "jobs": (
+        "The user is asking about job searching. Help them position their actual background "
+        "for their target role, including how to address any skill gaps in applications."
+    ),
+    "interview": (
+        "The user is asking about interview preparation. Tailor advice to their target role "
+        "and actual skill set. Reference specific experiences from their background when relevant."
+    ),
+    "learning": (
+        "The user is asking about learning resources. Ground recommendations in their actual "
+        "missing skills above — recommend resources that directly close those gaps."
+    ),
+    "general": "",
+}
 
-def build_coach_system_context(user) -> str:
+
+def build_coach_system_context(user, agent: str = "general") -> str:
     """
     Build a real grounded system prompt from the user's actual DB data.
+
+    Injects resume skills + experience, target role, missing skill gaps, and
+    recent job-match activity so the LLM can reference concrete facts.
+    Also appends the agent-specific instruction for the classified topic.
 
     If no parsed resume is found, the coach is told to ask for one instead of
     fabricating background knowledge about the user.
     """
+    first_name = "there"
     try:
         from django.contrib.auth import get_user_model
         User = get_user_model()
-        if hasattr(user, "profile"):
-            profile = user.profile
-        else:
-            profile = User.objects.select_related("profile").get(pk=user.pk).profile
-
-        first_name = (profile.first_name or "there").split()[0]
+        profile = User.objects.select_related("profile").get(pk=user.pk).profile
+        first_name = (getattr(profile, "first_name", None) or "there").split()[0]
     except Exception:
-        first_name = "there"
+        pass
 
     try:
-        from apps.resumes.models import Resume, ResumeAnalysis
+        from apps.resumes.models import Resume
         latest_resume = (
             Resume.objects.filter(user=user, status="parsed")
+            .select_related("analysis")
             .order_by("-created_at")
             .first()
         )
@@ -137,19 +163,21 @@ def build_coach_system_context(user) -> str:
                 "Their resume is still being processed. Let them know and offer to answer general questions."
             )
 
-        skills = ", ".join(analysis.skills or [])
+        skills = ", ".join(analysis.skills or []) or "none listed"
         experience_lines = "\n".join(
-            f"- {e.get('title', 'Role')} at {e.get('company', 'Company')} "
+            f"  - {e.get('title', 'Role')} at {e.get('company', 'Company')} "
             f"({e.get('start_date') or '?'}–{e.get('end_date') or 'Present'})"
             for e in (analysis.experience or [])[:5]
-        )
+        ) or "  - No work history extracted"
+
         context = (
             f"You are a career coach speaking with {first_name}.\n\n"
-            f"THEIR ACTUAL BACKGROUND (from their uploaded resume):\n"
-            f"- Skills: {skills}\n"
-            f"- Experience:\n{experience_lines}\n"
+            f"=== THEIR ACTUAL BACKGROUND (sourced from uploaded resume) ===\n"
+            f"Skills: {skills}\n"
+            f"Experience:\n{experience_lines}\n"
         )
 
+        # Target role from most recent CareerPath
         try:
             from apps.careers.models import CareerPath
             recent_path = (
@@ -158,16 +186,49 @@ def build_coach_system_context(user) -> str:
                 .first()
             )
             if recent_path:
-                context += f"\nThey are currently targeting: {recent_path.target_role}\n"
+                context += f"\nTarget role: {recent_path.target_role}\n"
+        except Exception:
+            pass
+
+        # Missing skills from most recent SkillGap — critical for grounded advice
+        try:
+            from apps.careers.models import SkillGap
+            recent_gap = (
+                SkillGap.objects.filter(user=user)
+                .order_by("-created_at")
+                .first()
+            )
+            if recent_gap and recent_gap.missing_skills:
+                missing = ", ".join(recent_gap.missing_skills[:10])
+                context += f"Identified skill gaps for {recent_gap.target_role}: {missing}\n"
+        except Exception:
+            pass
+
+        # Recent job match count for conversational context
+        try:
+            from apps.jobs.models import JobMatch
+            recent_jobs = JobMatch.objects.filter(user=user).order_by("-created_at")[:3]
+            if recent_jobs:
+                titles = ", ".join(j.title for j in recent_jobs)
+                context += f"Recently matched jobs: {titles}\n"
         except Exception:
             pass
 
         context += (
-            "\nGround your advice in this real background. Reference specific things "
-            "from their resume when relevant. Do not give generic advice that ignores "
-            "who they actually are."
+            "\n=== COACHING INSTRUCTIONS ===\n"
+            "Ground every response in the real background above. When relevant, reference "
+            "specific roles, companies, skills, or gaps by name — do not give generic advice "
+            "that could apply to any user. If the user asks a follow-up, honour the prior "
+            "conversation context.\n"
         )
+
+        # Append agent-specific instruction for the classified topic
+        addendum = _AGENT_SPECIALTY_ADDENDUM.get(agent, "")
+        if addendum:
+            context += f"\nFOCUS FOR THIS MESSAGE: {addendum}\n"
+
         return context
+
     except Exception:
         logger.exception("Failed to build coach system context for user=%s", getattr(user, "id", "?"))
         return (
@@ -312,7 +373,8 @@ async def stream_chat(
             logger.warning("Chat user lookup failed for user_id=%s", user_id)
 
     if user:
-        system_prompt = build_coach_system_context(user)
+        # Pass the classified agent so context includes agent-specific focus instruction
+        system_prompt = build_coach_system_context(user, agent=agent)
     else:
         system_prompt = _AGENT_SYSTEM_PROMPTS.get(agent, _AGENT_SYSTEM_PROMPTS["general"])
     messages = _build_lc_messages(system_prompt, history, content)
