@@ -107,11 +107,14 @@ export interface InterviewSession {
 export interface InterviewQuestion {
   id: string;
   session_id: string;
-  category: 'behavioral' | 'technical';
+  category: 'behavioral' | 'technical' | 'situational' | 'resume_specific' | 'general';
   question: string;
+  anchored_to?: string;
   user_answer?: string;
   ai_feedback?: string;
   score?: number;
+  strengths?: string[];
+  improvements?: string[];
   created_at: string;
 }
 

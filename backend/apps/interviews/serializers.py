@@ -10,7 +10,8 @@ class InterviewQuestionSerializer(serializers.ModelSerializer):
         model = InterviewQuestion
         fields = (
             "id", "session_id", "category", "question", "anchored_to",
-            "user_answer", "ai_feedback", "score", "created_at",
+            "user_answer", "ai_feedback", "score", "strengths", "improvements",
+            "created_at",
         )
 
 

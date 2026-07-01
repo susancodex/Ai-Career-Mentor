@@ -16,7 +16,12 @@ export async function getInterviewSession(sessionId: string): Promise<InterviewS
   return response.data;
 }
 
-export async function submitAnswer(questionId: string, userAnswer: string): Promise<{ ai_feedback: string; score: number }> {
+export async function submitAnswer(questionId: string, userAnswer: string): Promise<{
+  ai_feedback: string;
+  score: number;
+  strengths: string[];
+  improvements: string[];
+}> {
   const response = await apiClient.post(`/interviews/questions/${questionId}/answer/`, { user_answer: userAnswer });
   return response.data;
 }

@@ -127,6 +127,13 @@ class InterviewAnswerView(APIView):
         question.user_answer = user_answer
         question.ai_feedback = result.get("ai_feedback", "")
         question.score = result.get("score")
-        question.save(update_fields=["user_answer", "ai_feedback", "score"])
+        question.strengths = result.get("strengths") or []
+        question.improvements = result.get("improvements") or []
+        question.save(update_fields=["user_answer", "ai_feedback", "score", "strengths", "improvements"])
 
-        return Response({"ai_feedback": question.ai_feedback, "score": question.score})
+        return Response({
+            "ai_feedback": question.ai_feedback,
+            "score": question.score,
+            "strengths": question.strengths,
+            "improvements": question.improvements,
+        })

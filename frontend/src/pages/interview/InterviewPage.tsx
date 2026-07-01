@@ -8,7 +8,8 @@ import { Badge } from '../../components/ui/Badge';
 import { SkeletonCard } from '../../components/ui/Skeleton';
 import { ErrorState } from '../../components/ui/ErrorState';
 import { EmptyState } from '../../components/ui/EmptyState';
-import { Send, BrainCircuit, Award, MessageSquareQuote, CheckCircle2, ChevronRight } from 'lucide-react';
+import type { InterviewQuestion } from '../../types';
+import { Send, BrainCircuit, Award, MessageSquareQuote, CheckCircle2, ChevronRight, ThumbsUp, AlertCircle, BookmarkCheck } from 'lucide-react';
 
 const pageVariants = {
   hidden: { opacity: 0, y: 12 },
@@ -185,7 +186,15 @@ export function InterviewPage() {
   );
 }
 
-function QuestionCard({ question, sessionId, index }: { question: { id: string; category: 'behavioral' | 'technical'; question: string; user_answer?: string; ai_feedback?: string; score?: number }; sessionId: string; index: number }) {
+const CATEGORY_STYLE: Record<string, { variant: 'info' | 'warning' | 'success' | 'default'; label: string }> = {
+  technical:       { variant: 'info',    label: 'Technical' },
+  behavioral:      { variant: 'warning', label: 'Behavioral' },
+  situational:     { variant: 'warning', label: 'Situational' },
+  resume_specific: { variant: 'success', label: 'From Your Resume' },
+  general:         { variant: 'default', label: 'General' },
+};
+
+function QuestionCard({ question, sessionId, index }: { question: InterviewQuestion; sessionId: string; index: number }) {
   const [answer, setAnswer] = useState(question.user_answer || '');
   const [showFeedback, setShowFeedback] = useState(!!question.ai_feedback);
   const queryClient = useQueryClient();
@@ -204,48 +213,57 @@ function QuestionCard({ question, sessionId, index }: { question: { id: string; 
     }
   };
 
+  const score = question.score ?? answerMutation.data?.score;
+  const strengths = question.strengths?.length ? question.strengths : answerMutation.data?.strengths;
+  const improvements = question.improvements?.length ? question.improvements : answerMutation.data?.improvements;
+  const catStyle = CATEGORY_STYLE[question.category] ?? CATEGORY_STYLE.general;
+
   return (
     <Card className={`overflow-hidden transition-all duration-300 border-l-4 ${showFeedback ? 'border-l-emerald-500' : 'border-l-primary'}`}>
       <CardContent className="p-0">
         <div className="p-6 md:p-8 border-b border-slate-100 bg-white">
-          <div className="flex items-center gap-3 mb-4">
-            <span className="flex items-center justify-center w-8 h-8 rounded-full bg-slate-100 text-slate-500 font-bold text-sm">
+          <div className="flex flex-wrap items-center gap-2 mb-4">
+            <span className="flex items-center justify-center w-8 h-8 rounded-full bg-slate-100 text-slate-500 font-bold text-sm shrink-0">
               {index}
             </span>
-            <Badge variant={question.category === 'technical' ? 'info' : 'warning'} className="uppercase tracking-wider text-xs">
-              {question.category}
+            <Badge variant={catStyle.variant} className="uppercase tracking-wider text-xs">
+              {catStyle.label}
             </Badge>
             {showFeedback && (
-              <Badge variant="success" className="ml-auto flex items-center gap-1">
+              <Badge variant="success" className="flex items-center gap-1">
                 <CheckCircle2 className="w-3 h-3" /> Answered
               </Badge>
             )}
           </div>
           <p className="text-xl font-bold text-slate-900 leading-snug">{question.question}</p>
+          {question.anchored_to && (
+            <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
+              <BookmarkCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+              <span>Based on your resume: <span className="font-semibold text-slate-700">{question.anchored_to}</span></span>
+            </div>
+          )}
         </div>
 
         <div className="p-6 md:p-8 bg-slate-50">
           <AnimatePresence mode="wait">
             {!showFeedback ? (
-              <motion.div 
+              <motion.div
                 key="form"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 className="space-y-4"
               >
-                <div className="relative">
-                  <textarea
-                    value={answer}
-                    onChange={(e) => setAnswer(e.target.value)}
-                    placeholder="Structure your answer using the STAR method (Situation, Task, Action, Result)..."
-                    rows={6}
-                    className="w-full px-5 py-4 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent resize-y text-slate-700 shadow-sm transition-all"
-                  />
-                </div>
+                <textarea
+                  value={answer}
+                  onChange={(e) => setAnswer(e.target.value)}
+                  placeholder="Structure your answer using the STAR method (Situation, Task, Action, Result)..."
+                  rows={6}
+                  className="w-full px-5 py-4 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent resize-y text-slate-700 shadow-sm transition-all"
+                />
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-slate-500">
-                    {answer.length > 0 ? `${answer.split(/\s+/).length} words` : '0 words'}
+                    {answer.length > 0 ? `${answer.split(/\s+/).filter(Boolean).length} words` : '0 words'}
                   </span>
                   <Button
                     onClick={handleSubmit}
@@ -265,7 +283,7 @@ function QuestionCard({ question, sessionId, index }: { question: { id: string; 
                 )}
               </motion.div>
             ) : (
-              <motion.div 
+              <motion.div
                 key="feedback"
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
@@ -275,10 +293,10 @@ function QuestionCard({ question, sessionId, index }: { question: { id: string; 
                   <p className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Your Answer</p>
                   <p className="text-base text-slate-700 whitespace-pre-wrap leading-relaxed">{answer || question.user_answer}</p>
                 </div>
-                
+
                 <div className="bg-white rounded-xl p-6 border-2 border-primary/20 shadow-md relative overflow-hidden">
                   <div className="absolute top-0 right-0 w-32 h-32 bg-primary/5 rounded-bl-full -z-10" />
-                  
+
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
@@ -286,35 +304,67 @@ function QuestionCard({ question, sessionId, index }: { question: { id: string; 
                       </div>
                       <span className="text-lg font-bold text-slate-900">AI Feedback</span>
                     </div>
-                    
-                    {(question.score || answerMutation.data?.score) && (
+                    {score != null && (
                       <div className="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-lg border border-slate-100">
                         <span className="text-sm font-bold text-slate-600 uppercase tracking-wider">Score</span>
                         <div className="text-2xl font-black text-primary">
-                          {question.score || answerMutation.data?.score}<span className="text-lg text-slate-400">/100</span>
+                          {Math.round(score)}<span className="text-lg text-slate-400">/100</span>
                         </div>
                       </div>
                     )}
                   </div>
-                  
-                  <p className="text-base text-slate-700 leading-relaxed relative z-10">
+
+                  <p className="text-base text-slate-700 leading-relaxed">
                     {question.ai_feedback || answerMutation.data?.ai_feedback}
                   </p>
-                  
-                  {(question.score || answerMutation.data?.score) && (
-                    <div className="mt-6 pt-6 border-t border-slate-100">
+
+                  {score != null && (
+                    <div className="mt-5 pt-5 border-t border-slate-100">
                       <div className="flex items-center justify-between text-sm font-bold text-slate-500 mb-2">
                         <span>Readiness</span>
-                        <span>{(question.score || answerMutation.data?.score || 0) >= 80 ? 'Strong' : (question.score || answerMutation.data?.score || 0) >= 60 ? 'Moderate' : 'Needs Work'}</span>
+                        <span>{score >= 80 ? 'Strong' : score >= 60 ? 'Moderate' : 'Needs Work'}</span>
                       </div>
                       <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
                         <div
-                          className={`h-full rounded-full transition-all duration-1000 ease-out ${(question.score || answerMutation.data?.score || 0) >= 80 ? 'bg-emerald-500' : (question.score || answerMutation.data?.score || 0) >= 60 ? 'bg-amber-500' : 'bg-rose-500'}`}
-                          style={{ width: `${question.score || answerMutation.data?.score || 0}%` }}
+                          className={`h-full rounded-full transition-all duration-1000 ease-out ${score >= 80 ? 'bg-emerald-500' : score >= 60 ? 'bg-amber-500' : 'bg-rose-500'}`}
+                          style={{ width: `${score}%` }}
                         />
                       </div>
                     </div>
                   )}
+
+                  {(strengths?.length || improvements?.length) ? (
+                    <div className="mt-5 pt-5 border-t border-slate-100 grid sm:grid-cols-2 gap-4">
+                      {strengths?.length ? (
+                        <div>
+                          <p className="text-xs font-bold uppercase tracking-wider text-emerald-600 flex items-center gap-1.5 mb-2">
+                            <ThumbsUp className="w-3.5 h-3.5" /> Strengths
+                          </p>
+                          <ul className="space-y-1.5">
+                            {strengths.map((s, i) => (
+                              <li key={i} className="text-sm text-slate-700 flex gap-2">
+                                <span className="text-emerald-500 mt-0.5 shrink-0">✓</span>{s}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+                      {improvements?.length ? (
+                        <div>
+                          <p className="text-xs font-bold uppercase tracking-wider text-amber-600 flex items-center gap-1.5 mb-2">
+                            <AlertCircle className="w-3.5 h-3.5" /> To Improve
+                          </p>
+                          <ul className="space-y-1.5">
+                            {improvements.map((s, i) => (
+                              <li key={i} className="text-sm text-slate-700 flex gap-2">
+                                <span className="text-amber-500 mt-0.5 shrink-0">→</span>{s}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               </motion.div>
             )}

@@ -1,0 +1,90 @@
+2.5 Skill Builder — Must Track Real Progress, Not Reset Every Session
+
+How to tell it's fake: Completing a learning module, marking a skill as "in
+progress," or finishing a recommended course doesn't persist — reload the page and
+everything is back to 0%, or the "recommended resources" are the same 5 generic
+links (freeCodeCamp homepage, Coursera homepage) regardless of the skill gap identified.
+
+What "real" looks like:
+
+1. Skill gaps come from the SAME computation used in Career Path Explorer (2.2) —
+   not a separately hardcoded list. Reuse the comparison logic, don't duplicate it
+   with different (fake) numbers.
+2. Recommended resources are specific to the actual missing skill — a real course
+   URL, a real book, a real specific YouTube playlist or doc page — not a generic
+   "learn to code" link reused for every skill
+3. Progress tracking persists to the database: marking a resource "completed"
+   updates a real UserSkillProgress row, survives logout/login, survives refresh
+4. Overall skill-builder completion percentage is computed from real completed/total
+   ratios, not a fixed "you're 60% there!" string
+
+Backend fix pattern:
+
+python# backend/apps/skills/models.py
+class UserSkillProgress(models.Model):
+    user           = models.ForeignKey(User, on_delete=models.CASCADE)
+    skill_name     = models.CharField(max_length=100)
+    target_role    = models.CharField(max_length=150, blank=True)
+    status         = models.CharField(
+        max_length=20,
+        choices=[("not_started", "Not Started"), ("in_progress", "In Progress"), ("completed", "Completed")],
+        default="not_started",
+    )
+    resources      = models.JSONField(default=list)  # [{title, url, type, completed: bool}]
+    started_at     = models.DateTimeField(null=True, blank=True)
+    completed_at   = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        unique_together = [["user", "skill_name", "target_role"]]
+
+
+# backend/apps/skills/views.py
+class MarkResourceCompleteView(APIView):
+    def post(self, request, progress_id, resource_index):
+        progress = get_object_or_404(UserSkillProgress, id=progress_id, user=request.user)
+        resources = progress.resources
+        if resource_index >= len(resources):
+            return Response({"error": "Invalid resource index."}, status=400)
+
+        resources[resource_index]["completed"] = True
+        progress.resources = resources
+
+        all_done = all(r["completed"] for r in resources)
+        if all_done and progress.status != "completed":
+            progress.status = "completed"
+            progress.completed_at = timezone.now()
+        elif progress.status == "not_started":
+            progress.status = "in_progress"
+            progress.started_at = timezone.now()
+
+        progress.save()
+        return Response(UserSkillProgressSerializer(progress).data)
+
+Resource generation fix (must be specific, not generic):
+
+python# ai_service/services/resource_recommender.py
+async def recommend_resources_for_skill(skill_name: str, current_level: str) -> list[dict]:
+    """
+    Must produce resources SPECIFIC to this skill — a request for 'Kubernetes'
+    and a request for 'Public Speaking' must return completely different,
+    actually-relevant resources, not the same generic learning platforms.
+    """
+    prompt = f"""Recommend 3-4 specific, real, currently-existing learning
+resources for someone who is {current_level} and wants to learn: {skill_name}
+
+For each resource provide:
+- A real, specific title (not 'Learn {skill_name} Course' — an actual named
+  course/book/doc/video series that exists)
+- type: course | book | documentation | video | practice_platform
+- A brief reason this specific resource fits a {current_level} learner
+
+Do not recommend generic homepages (e.g. 'Coursera.org', 'YouTube.com').
+Recommend the SPECIFIC resource within that platform.
+
+Return strict JSON: [{{ title, type, reason, suggested_url }}]
+"""
+    response = await model.generate_content_async(prompt)
+    resources = parse_structured_json(response.text)
+    for r in resources:
+        r["completed"] = False
+    return resources

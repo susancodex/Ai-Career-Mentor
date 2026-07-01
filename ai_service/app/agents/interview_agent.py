@@ -49,14 +49,18 @@ _SCORE_SYSTEM = """You are a rigorous interview coach. The question, context, an
 Evaluate the answer on three dimensions:
 1. Relevance — does the answer actually address what was asked?
 2. Specificity — does the candidate use concrete examples, numbers, or named outcomes rather than vague generalities?
-3. Accuracy — where verifiable against the resume context, does the answer align with their actual experience?
+3. Structure — for behavioral questions, does it follow STAR (Situation, Task, Action, Result) or similar?
+
+CALIBRATION: Score on a 0-100 scale. Most first-attempt answers in real interviews score 40-70. Reserve 80+ for genuinely strong, specific, well-structured answers. A one-liner or vague claim should score 20-45. Do NOT default to high scores — honest, differentiated scoring is the entire point.
 
 Return ONLY valid JSON — no markdown, no explanation:
 {
-  "ai_feedback": "2-3 sentences of specific, actionable feedback. If the answer is vague, say so. If it contradicts the resume, flag it.",
-  "score": 7.5
+  "ai_feedback": "2-3 sentences of specific, actionable feedback referencing the actual content of the answer. If vague, say so explicitly. If it contradicts the resume context, flag it.",
+  "score": 55.0,
+  "strengths": ["one concrete thing done well — must reference the actual answer"],
+  "improvements": ["one specific, actionable thing to improve — not generic advice"]
 }
-score must be a float between 0.0 and 10.0. A perfect "Good answer!" without basis is wrong — be accurate."""
+score must be a float between 0.0 and 100.0. strengths and improvements must each have 1-3 items grounded in what was actually written."""
 
 
 def _seniority_label(years: int) -> str:
@@ -139,6 +143,14 @@ async def run_question_generator(
     return result
 
 
+_SHORT_ANSWER_RESULT = AnswerScoreResult(
+    ai_feedback="Your answer is too short to evaluate. Try giving a complete response with specific examples.",
+    score=0.0,
+    strengths=[],
+    improvements=["Provide a fuller answer — aim for at least 2-3 sentences with a concrete example."],
+)
+
+
 async def run_answer_scorer(
     question_text: str,
     user_answer: str,
@@ -146,6 +158,10 @@ async def run_answer_scorer(
     session_id: Optional[str] = None,
     resume_context: Optional[str] = None,
 ) -> AnswerScoreResult:
+    # Guard: skip LLM call for trivially short answers — score 0 immediately.
+    if len(user_answer.strip()) < 10:
+        return _SHORT_ANSWER_RESULT
+
     llm = get_llm(session_id=session_id)
 
     context_block = ""

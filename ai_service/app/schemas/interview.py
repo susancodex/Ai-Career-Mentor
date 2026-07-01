@@ -25,7 +25,9 @@ class InterviewQuestionsRequest(BaseModel):
 
 class AnswerScoreResult(BaseModel):
     ai_feedback: str
-    score: float = Field(ge=0.0, le=10.0)
+    score: float = Field(ge=0.0, le=100.0)
+    strengths: List[str] = Field(default_factory=list)
+    improvements: List[str] = Field(default_factory=list)
 
 
 class AnswerScoreRequest(BaseModel):

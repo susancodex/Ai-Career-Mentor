@@ -52,5 +52,9 @@ class InterviewQuestion(models.Model):
     anchored_to = models.CharField(max_length=500, blank=True, default="")
     user_answer = models.TextField(blank=True)
     ai_feedback = models.TextField(blank=True)
+    # 0-100 scale (matches the /100 display in the UI)
     score = models.FloatField(null=True, blank=True)
+    # Structured feedback arrays from the scorer
+    strengths = models.JSONField(default=list, blank=True)
+    improvements = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
