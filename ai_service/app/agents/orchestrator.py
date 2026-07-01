@@ -163,18 +163,25 @@ def build_coach_system_context(user, agent: str = "general") -> str:
                 "Their resume is still being processed. Let them know and offer to answer general questions."
             )
 
-        skills = ", ".join(analysis.skills or []) or "none listed"
+        # Correct model field names: extracted_skills, work_history, years_of_experience, gaps, strengths
+        skills = ", ".join(analysis.extracted_skills or []) or "none listed"
+        yoe = analysis.years_of_experience or 0
         experience_lines = "\n".join(
             f"  - {e.get('title', 'Role')} at {e.get('company', 'Company')} "
             f"({e.get('start_date') or '?'}–{e.get('end_date') or 'Present'})"
-            for e in (analysis.experience or [])[:5]
+            for e in (analysis.work_history or [])[:5]
         ) or "  - No work history extracted"
+        gaps_line = ", ".join(analysis.gaps or []) or "none identified yet"
+        strengths_line = ", ".join(analysis.strengths or []) or "none identified yet"
 
         context = (
             f"You are a career coach speaking with {first_name}.\n\n"
             f"=== THEIR ACTUAL BACKGROUND (sourced from uploaded resume) ===\n"
+            f"Years of experience: {yoe}\n"
             f"Skills: {skills}\n"
-            f"Experience:\n{experience_lines}\n"
+            f"Strengths: {strengths_line}\n"
+            f"Resume gaps: {gaps_line}\n"
+            f"Work history:\n{experience_lines}\n"
         )
 
         # Target role from most recent CareerPath

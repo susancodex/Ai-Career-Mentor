@@ -1,0 +1,84 @@
+Backend fix pattern:
+
+python# backend/apps/chat/context_builder.py
+def build_coach_system_context(user: User) -> str:
+    """
+    Real grounding — pulled from actual stored user data, assembled fresh
+    for each session. If the user has no resume yet, the coach must know
+    that and ask for one rather than giving generic advice as if it had context.
+    """
+    profile = user.profile
+    latest_resume = Resume.objects.filter(user=user, status="parsed").order_by("-created_at").first()
+
+    if not latest_resume:
+        return (
+            f"You are a career coach speaking with {profile.first_name or 'the user'}. "
+            "They have not uploaded a resume yet. Do not pretend to know their background — "
+            "ask them to upload one for personalized advice, or answer general questions "
+            "honestly as general advice, clearly labeled as such."
+        )
+
+    analysis = latest_resume.analysis
+    recent_career_path = CareerPath.objects.filter(user=user).order_by("-created_at").first()
+
+    context = f"""You are a career coach speaking with {profile.first_name or 'the user'}.
+
+THEIR ACTUAL BACKGROUND (from their uploaded resume):
+- Years of experience: {analysis.years_of_experience}
+- Skills: {', '.join(analysis.extracted_skills)}
+- Recent roles: {', '.join(w['title'] + ' at ' + w['company'] for w in analysis.work_history[:3])}
+- Identified gaps: {', '.join(analysis.gaps)}
+"""
+    if recent_career_path:
+        context += f"\nThey are currently targeting: {recent_career_path.target_role}\n"
+
+    context += (
+        "\nGround your advice in this real background. Reference specific things "
+        "from their resume when relevant. Do not give generic advice that ignores "
+        "who they actually are."
+    )
+    return context
+
+python# backend/apps/chat/tasks.py — conversation memory fix
+def build_message_history(session: ChatSession, max_turns: int = 12) -> list[dict]:
+    """
+    Real history — pulls actual prior messages from the DB, not just the
+    current message in isolation.
+    """
+    messages = session.messages.order_by("created_at")[-max_turns:]
+    return [{"role": m.role, "content": m.content} for m in messages]
+
+@shared_task(bind=True, max_retries=3)
+def stream_chat_message(self, session_id, message, user_id):
+    session = ChatSession.objects.select_related("user__profile").get(id=session_id)
+    system_context = build_coach_system_context(session.user)
+    history = build_message_history(session)
+
+    payload = {
+        "system": system_context,
+        "history": history,   # full real history, not just the latest turn
+        "message": message,
+        "session_id": session_id,
+    }
+    # ... HMAC sign and stream as before
+
+Verification:
+
+bash# Send a first message referencing the resume
+curl -s -N -X POST http://localhost/api/v1/chat/sessions/$SESSION/messages/ \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"content":"What should I focus on to get promoted?"}'
+# Watch for grounding — response should reference real skills/gaps from the resume,
+# not generic "communicate well and take initiative" boilerplate
+
+# Send a follow-up that depends on memory of the first answer
+curl -s -N -X POST http://localhost/api/v1/chat/sessions/$SESSION/messages/ \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"content":"Which of those should I prioritize first?"}'
+# Must coherently reference "those" from the previous answer — if it asks
+# "which of what?" or gives an unrelated answer, conversation memory is broken
+
+# Test a user with NO resume uploaded — coach must say so, not fabricate a background
+
+STOP — coach must visibly use real resume context and real prior-turn memory, not
+generic boilerplate.
