@@ -18,6 +18,7 @@ class CareerPathResult(BaseModel):
 class CareerPathRequest(BaseModel):
     resume_id: str
     target_role: str = ""
+    existing_skills: List[str] = Field(default_factory=list)
 
 
 class SkillGapResult(BaseModel):

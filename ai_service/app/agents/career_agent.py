@@ -34,16 +34,21 @@ Generate 2-3 realistic career paths toward the target role and return ONLY a JSO
 {
   "paths": [
     [
-      {"role": "Next Role", "timeframe": "6-12 months", "reasoning": "why", "required_skills": ["skill"]},
-      {"role": "Final Role", "timeframe": "2-3 years", "reasoning": "why", "required_skills": ["skill"]}
+      {"role": "Next Role", "timeframe": "6-12 months", "reasoning": "why this step fits this candidate specifically", "required_skills": ["only skills NOT already owned"]},
+      {"role": "Final Role", "timeframe": "2-3 years", "reasoning": "why", "required_skills": ["only skills NOT already owned"]}
     ]
   ],
   "recommended_path_index": 0,
-  "summary": "brief recommendation rationale"
+  "summary": "brief recommendation rationale referencing this candidate's actual background"
 }
 
-IMPORTANT: Calibrate timelines and recommendations to the candidate's actual years of experience and work history.
-A junior and a senior with the same skill keywords must receive different timelines and reasoning."""
+CRITICAL RULES:
+1. Calibrate timelines to the candidate's ACTUAL years of experience and work history.
+   A junior (0-2 yrs) and a senior (10+ yrs) with overlapping skills get different timelines.
+2. required_skills for each step must contain ONLY skills the candidate does NOT already have.
+   Do NOT list any skill from the ALREADY OWNED list provided below.
+3. reasoning must reference at least one specific item from the candidate's actual work history
+   or skill set — not a generic statement that could apply to any candidate."""
 
 
 async def run_skill_gap_agent(
@@ -95,9 +100,13 @@ async def run_career_path_agent(
     years_of_experience: int,
     skills: List[str],
     target_role: str,
+    existing_skills: Optional[List[str]] = None,
     session_id: Optional[str] = None,
 ) -> CareerPathResult:
     llm = get_llm(session_id=session_id)
+
+    # Normalise for fast membership check (case-insensitive)
+    owned = {s.lower() for s in (existing_skills or skills)}
 
     experience_lines = "\n".join(
         f"- {e.get('title', 'Role')} at {e.get('company', 'Company')} "
@@ -112,7 +121,8 @@ async def run_career_path_agent(
                 f"Target role: {target_role}\n\n"
                 f"Years of experience: {years_of_experience}\n\n"
                 f"Work history (data only):\n{experience_lines}\n\n"
-                f"Current skills: {json.dumps(skills)}"
+                f"Current skills: {json.dumps(skills)}\n\n"
+                f"ALREADY OWNED (must NOT appear in any required_skills): {json.dumps(list(owned))}"
             )
         ),
     ]
@@ -126,6 +136,16 @@ async def run_career_path_agent(
 
     if result is None:
         raise ValueError(f"Career path agent failed for target_role={target_role}")
+
+    # Post-LLM filter: strip any already-owned skills the model still included,
+    # since LLMs occasionally ignore explicit exclusion lists.
+    for path in result.paths:
+        for step in path:
+            step.required_skills = [
+                s for s in step.required_skills
+                if s.lower() not in owned
+            ]
+
     return result
 
 

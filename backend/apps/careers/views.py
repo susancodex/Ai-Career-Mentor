@@ -17,6 +17,7 @@ class CareerPathGenerateView(APIView):
     def post(self, request):
         resume_id = request.data.get("resume_id")
         target_role = request.data.get("target_role", "")
+        force_regenerate = request.data.get("force_regenerate", False)
 
         if not resume_id:
             return Response(
@@ -25,12 +26,28 @@ class CareerPathGenerateView(APIView):
             )
 
         try:
-            Resume.objects.get(pk=resume_id, user=request.user, status="parsed")
+            resume = Resume.objects.get(pk=resume_id, user=request.user, status="parsed")
         except Resume.DoesNotExist:
             return Response(
                 {"error": {"code": "not_found", "message": "Parsed resume not found.", "details": {}}},
                 status=status.HTTP_404_NOT_FOUND,
             )
+
+        # Return cached result immediately unless the caller explicitly requests regeneration.
+        # This is the primary mechanism that makes paths stable across requests.
+        existing = CareerPath.objects.filter(
+            user=request.user, resume=resume, target_role=target_role
+        ).first()
+
+        if existing and not force_regenerate:
+            return Response(
+                {"cached": True, "result": CareerPathSerializer(existing).data},
+                status=status.HTTP_200_OK,
+            )
+
+        # Delete stale row before regenerating so update_or_create in the task is clean.
+        if existing and force_regenerate:
+            existing.delete()
 
         job_id = str(uuid.uuid4())
         safe_apply_async(

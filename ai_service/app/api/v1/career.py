@@ -39,13 +39,20 @@ async def skill_gaps(request: Request, body: SkillGapRequest):
     dependencies=[Depends(verify_internal_signature)],
 )
 async def career_paths(request: Request, body: CareerPathRequest):
-    """Generate ranked career paths toward a target role."""
+    """
+    Generate ranked career paths toward a target role.
+
+    existing_skills is provided by the Django task (sourced from the stored
+    ResumeAnalysis) so the agent can exclude already-owned skills from each
+    path step's required_skills list.
+    """
     try:
         analysis = await get_resume_analysis(body.resume_id)
         result = await run_career_path_agent(
             work_history=analysis["work_history"],
             years_of_experience=analysis["years_of_experience"],
             skills=analysis["extracted_skills"],
+            existing_skills=body.existing_skills or analysis["extracted_skills"],
             target_role=body.target_role,
             session_id=body.resume_id,
         )
