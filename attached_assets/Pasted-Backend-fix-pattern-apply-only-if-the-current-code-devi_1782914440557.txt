@@ -1,0 +1,118 @@
+Backend fix pattern (apply only if the current code deviates from this):
+
+python# ai_service/services/resume_parser.py
+import pdfplumber
+from docx import Document as DocxDocument
+
+def extract_text(file_bytes: bytes, content_type: str) -> str:
+    """Real text extraction — must actually read the file, not return a stub."""
+    if "pdf" in content_type:
+        text_chunks = []
+        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+            for page in pdf.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text_chunks.append(page_text)
+        text = "\n".join(text_chunks)
+    elif "wordprocessingml" in content_type or "docx" in content_type:
+        doc = DocxDocument(io.BytesIO(file_bytes))
+        text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+    else:
+        raise ValueError(f"Unsupported file type: {content_type}")
+
+    if len(text.strip()) < 50:
+        # A "successfully parsed" empty/near-empty result is itself a dummy outcome —
+        # surface it as a real failure so the user can fix their upload.
+        raise ResumeParsingError(
+            "Could not extract readable text from this file. "
+            "It may be a scanned image — try a text-based PDF or DOCX."
+        )
+    return text
+
+
+# ai_service/services/resume_analyzer.py
+async def analyze_resume(resume_text: str, target_role: str | None = None) -> ResumeAnalysis:
+    """
+    Sends the FULL extracted resume text to the model.
+    No template substitution, no truncation below a safe context limit,
+    no fallback to a generic 'here are common resume tips' response.
+    """
+    prompt = f"""You are analyzing a real candidate's resume. Extract and assess
+ONLY what is actually present in the text below. Do not invent skills, companies,
+or experience that are not stated. If information is missing, say so explicitly
+rather than guessing.
+
+RESUME TEXT:
+---
+{resume_text}
+---
+
+{"TARGET ROLE: " + target_role if target_role else ""}
+
+Return strict JSON with these fields:
+- extracted_skills: list of skills explicitly found in the text
+- years_of_experience: integer, computed from actual date ranges in the text
+- work_history: list of {{company, title, start_date, end_date}} from the text
+- strengths: 3-5 specific observations tied to actual resume content
+- gaps: specific missing elements relevant to the target role (or general
+  best practice if no target role given) — must reference what's actually
+  absent, not generic advice
+- ats_issues: formatting/structure problems found in THIS resume specifically
+- overall_score: integer 0-100 based on the analysis above
+"""
+    response = await model.generate_content_async(prompt)
+    parsed = parse_structured_json(response.text)  # validate against schema, retry once on failure
+    return ResumeAnalysis(**parsed)
+
+Persistence check (apply only if missing):
+
+python# backend/apps/resumes/tasks.py
+@shared_task(bind=True, max_retries=2)
+def parse_and_analyze_resume(self, resume_id: int):
+    resume = Resume.objects.get(id=resume_id)
+    resume.status = "processing"
+    resume.save(update_fields=["status"])
+    try:
+        file_bytes = download_from_cloudinary(resume.cloudinary_url)
+        text = call_ai_service_extract(file_bytes, resume.content_type)
+        analysis = call_ai_service_analyze(text, resume.target_role)
+
+        # REAL persistence — tied to this exact resume, queryable later, stable on refresh
+        ResumeAnalysis.objects.update_or_create(
+            resume=resume,
+            defaults={
+                "extracted_skills": analysis["extracted_skills"],
+                "years_of_experience": analysis["years_of_experience"],
+                "work_history": analysis["work_history"],
+                "strengths": analysis["strengths"],
+                "gaps": analysis["gaps"],
+                "ats_issues": analysis["ats_issues"],
+                "overall_score": analysis["overall_score"],
+                "raw_extracted_text": text,
+            },
+        )
+        resume.status = "parsed"
+        resume.save(update_fields=["status"])
+    except ResumeParsingError as e:
+        resume.status = "failed"
+        resume.error_message = str(e)
+        resume.save(update_fields=["status", "error_message"])
+
+Verification (must use two genuinely different resumes):
+
+bash# Upload resume A (e.g. 2 years experience, frontend dev)
+# Upload resume B (e.g. 12 years experience, engineering manager)
+# Fetch both analyses and diff them
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost/api/v1/resumes/A_ID/analysis/ | python3 -m json.tool > /tmp/analysis_a.json
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost/api/v1/resumes/B_ID/analysis/ | python3 -m json.tool > /tmp/analysis_b.json
+diff /tmp/analysis_a.json /tmp/analysis_b.json
+# Expect: years_of_experience, skills, work_history, strengths, gaps ALL meaningfully different
+
+# Refresh check — fetch the same analysis twice, confirm it's identical (stable, not re-randomized)
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost/api/v1/resumes/A_ID/analysis/ > /tmp/run1.json
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost/api/v1/resumes/A_ID/analysis/ > /tmp/run2.json
+diff /tmp/run1.json /tmp/run2.json
+# Expect: NO diff
+
+STOP — analyses must differ meaningfully across resumes AND stay stable across refreshes.
+
