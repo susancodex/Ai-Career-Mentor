@@ -1,0 +1,99 @@
+AI Career Mentor — Dummy-to-Real Production Repair Prompt
+
+(Audit Existing Build · Replace Fake Logic with Real Logic · Sell-Ready)
+
+
+What this file is for: You already built the AI Career Mentor — frontend, backend,
+and AI service all exist and the app runs. The problem is that core features are not
+doing what their name promises: they are wired to mock data, hardcoded responses,
+fake delays, or shortcuts that look like a feature works in a demo but fall apart
+the moment a real person uses it for real career decisions.
+
+This is a repair and verification prompt, not a rebuild prompt. You are auditing
+an existing codebase feature by feature, proving with evidence whether each one is
+real or fake, and replacing only the fake parts. Do not regenerate working files.
+Do not touch UI components, layouts, or styling that already function correctly —
+this is about making the substance behind each feature real, because this product
+is going to be evaluated and bought by a company, and a company will test it like
+a skeptical user, not like a forgiving demo audience.
+
+
+
+
+0. Ground Rules for This Pass
+
+
+Audit first, edit second. For every feature in Section 2, you must first prove
+to yourself — by reading the actual code path end-to-end — whether it is real or
+fake. Only after you've identified the exact fake part do you edit it.
+Minimum-diff principle. Change only what is fake, mocked, hardcoded, or
+shortcut-driven. If a component, hook, route, or style is already correctly
+wired to real data and real logic, leave it untouched. Do not refactor for taste.
+Do not rename. Do not reorganize folders. Every edit must be justified by
+"this was fake and is now real" — nothing else.
+"Dummy" has a precise definition for this audit. A feature is dummy if any of
+these are true:
+
+It returns a hardcoded array/object regardless of input (e.g. same 3 job matches
+for every resume, same interview questions for every role)
+It uses setTimeout or Math.random() to simulate a result instead of
+actually computing or fetching one
+It calls the AI but ignores the resume/profile/context and uses a generic prompt
+It has no persistence — refresh the page and the "result" disappears or resets
+It has a UI that submits but the backend route doesn't exist, returns a stub,
+or silently no-ops
+The "AI" response is actually a static string array randomly selected client-side
+Pagination, filters, or search exist visually but don't change what's rendered
+Any state that should differ per-user is shared/identical across all users
+
+
+
+No vibe coding — ever, on any file in this pass. Vibe coding here means
+writing or editing code based on what "feels right," what a similar snippet
+looked like in a tutorial, or what makes a demo click look successful — without
+having actually read the existing call chain, confirmed the data contract between
+frontend and backend, or run a real verification against real input. It is the
+single biggest reason a project that "worked in the video" falls apart the moment
+a real evaluator touches it. Concretely, this means:
+
+No editing a file you haven't fully read. Before changing any function,
+view the entire file it lives in, plus the file that calls it and the file
+it calls. Editing based on a function name and a guess at what it probably
+does is vibe coding.
+No copying a pattern from one feature into another without checking it fits.
+The Resume Analyzer's persistence pattern and the Job Matches' persistence
+pattern look similar but have different uniqueness constraints, different
+foreign keys, different refresh semantics. Pasting one over the other without
+reading both data models first is vibe coding.
+No "this should work" commits. Every change in this pass must be followed
+immediately by the verification command specified for that feature, with the
+actual output checked against the actual expected output — not assumed from
+reading the code.
+No silently changing a function's contract to make a test pass. If a
+verification fails, fix the actual bug. Do not loosen a status check, widen
+a type, swallow an exception, or change what "passes" means so the red turns
+green without the underlying behavior being fixed.
+No inventing data shapes that aren't backed by the real schema. If you're
+not sure what fields ResumeAnalysis actually has, read the model — do not
+write a serializer or frontend type based on what fields "probably" exist.
+No leaving an edit half-wired. If you change a backend response shape,
+grep for every frontend consumer of that endpoint and update them in the
+same pass. A backend field rename that breaks three frontend components
+silently is exactly the kind of gap vibe coding produces.
+State your reasoning before each fix, in plain text, in your own working
+notes: "File X, function Y, currently does Z (confirmed by reading lines
+A-B). This is fake because [specific reason from the Section 1 audit].
+The fix is [specific change]. Verified by [specific command + actual output]."
+If you cannot fill in all four parts honestly, you are not ready to make
+the edit yet — go back and read more of the code first.
+
+
+
+This product will be evaluated by a company, not a friendly user. Assume the
+evaluator will: upload a real, messy resume; ask the AI coach an unexpected
+question; refresh mid-flow; use it on a phone with a bad connection; try to break
+auth; check whether two different user accounts see different data. Build for that
+evaluator, not for a screen recording.
+STOP checkpoints are mandatory gates. Do not move to the next feature until the
+current one passes its verification with real, varied input — not the one example
+input you used while building it.
