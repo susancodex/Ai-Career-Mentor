@@ -10,8 +10,9 @@ async def career_coach_node(state: CareerMentorState) -> CareerMentorState:
     profile = state.get("resume_profile") or {}
     try:
         result = await run_career_path_agent(
-            resume_summary=profile.get("summary", ""),
-            skills=profile.get("skills", []),
+            work_history=profile.get("work_history", []),
+            years_of_experience=profile.get("years_of_experience", 0),
+            skills=profile.get("extracted_skills", []),
             target_role=state.get("target_role") or "",
         )
         return {**state, "career_path": result.model_dump()}

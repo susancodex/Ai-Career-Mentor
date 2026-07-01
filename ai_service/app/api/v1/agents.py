@@ -69,10 +69,11 @@ async def run_interview_agent(request: InterviewRunRequest, _=Depends(verify_int
         "requested_outputs": ["interview_output"],
         "errors": [],
         "resume_profile": {
-            "skills": analysis.get("skills", []),
-            "experience": analysis.get("experience", []),
-            "education": analysis.get("education", []),
-            "summary": analysis.get("summary", ""),
+            "extracted_skills": analysis.get("extracted_skills", []),
+            "work_history": analysis.get("work_history", []),
+            "years_of_experience": analysis.get("years_of_experience", 0),
+            "strengths": analysis.get("strengths", []),
+            "gaps": analysis.get("gaps", []),
         },
     }
     try:

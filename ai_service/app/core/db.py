@@ -61,20 +61,29 @@ async def close_pool() -> None:
 # Query helpers
 # ---------------------------------------------------------------------------
 
-_EMPTY_ANALYSIS = {"skills": [], "summary": "", "embedding": []}
+_EMPTY_ANALYSIS = {
+    "extracted_skills": [],
+    "years_of_experience": 0,
+    "work_history": [],
+    "strengths": [],
+    "gaps": [],
+    "ats_issues": [],
+    "overall_score": 0,
+    "embedding": [],
+}
 
 
 async def get_resume_analysis(resume_id: str) -> dict:
     """
-    Fetch skills, summary, and embedding from resumes_resumeanalysis.
+    Fetch the full ResumeAnalysis row for a given resume_id.
 
     Returns _EMPTY_ANALYSIS if:
       - The pool is not yet initialised (startup ordering).
       - No analysis row exists for this resume_id (analysis still running).
       - Any DB error (logged, never raised to the caller).
 
-    The embedding column is stored as a JSON list by Django's JSONField;
-    asyncpg returns it as a str that we parse here.
+    JSON columns are stored as JSON text by Django's JSONField;
+    asyncpg returns them as str — we parse those here.
     """
     if not _pool:
         logger.warning("DB pool not ready — returning empty resume analysis for %s", resume_id)
@@ -83,7 +92,8 @@ async def get_resume_analysis(resume_id: str) -> dict:
     try:
         row = await _pool.fetchrow(
             """
-            SELECT skills, summary, embedding
+            SELECT extracted_skills, years_of_experience, work_history,
+                   strengths, gaps, ats_issues, overall_score, embedding
             FROM resumes_resumeanalysis
             WHERE resume_id = $1
             """,
@@ -96,19 +106,20 @@ async def get_resume_analysis(resume_id: str) -> dict:
     if not row:
         return _EMPTY_ANALYSIS
 
-    # Django's JSONField persists as JSON text via asyncpg — parse if needed.
-    skills = row["skills"]
-    if isinstance(skills, str):
-        skills = json.loads(skills)
-
-    embedding = row["embedding"]
-    if isinstance(embedding, str):
-        embedding = json.loads(embedding)
+    def _parse_json(val):
+        if isinstance(val, str):
+            return json.loads(val)
+        return val
 
     return {
-        "skills": skills or [],
-        "summary": row["summary"] or "",
-        "embedding": embedding or [],
+        "extracted_skills": _parse_json(row["extracted_skills"]) or [],
+        "years_of_experience": row["years_of_experience"] or 0,
+        "work_history": _parse_json(row["work_history"]) or [],
+        "strengths": _parse_json(row["strengths"]) or [],
+        "gaps": _parse_json(row["gaps"]) or [],
+        "ats_issues": _parse_json(row["ats_issues"]) or [],
+        "overall_score": row["overall_score"] or 0,
+        "embedding": _parse_json(row["embedding"]) or [],
     }
 
 

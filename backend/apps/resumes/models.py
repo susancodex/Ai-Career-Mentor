@@ -31,10 +31,14 @@ class Resume(models.Model):
 class ResumeAnalysis(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     resume = models.OneToOneField(Resume, on_delete=models.CASCADE, related_name="analysis")
-    skills = models.JSONField(default=list)
-    experience = models.JSONField(default=list)
-    education = models.JSONField(default=list)
-    summary = models.TextField(blank=True)
+    extracted_skills = models.JSONField(default=list)
+    years_of_experience = models.IntegerField(default=0)
+    work_history = models.JSONField(default=list)
+    strengths = models.JSONField(default=list)
+    gaps = models.JSONField(default=list)
+    ats_issues = models.JSONField(default=list)
+    overall_score = models.IntegerField(default=0)
+    raw_extracted_text = models.TextField(blank=True)
     # embedding stored as JSON list of 768 floats; pgvector handled by AI service directly
     embedding = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

@@ -8,11 +8,7 @@ logger = logging.getLogger(__name__)
 
 async def skill_gap_node(state: CareerMentorState) -> CareerMentorState:
     profile = state.get("resume_profile") or {}
-    skills = profile.get("skills", [])
-    required_skills = []
-    market_data = state.get("market_data")
-    if market_data:
-        required_skills = market_data.get("current_market_requirements", [])
+    skills = profile.get("extracted_skills", [])
 
     try:
         result = await run_skill_gap_agent(

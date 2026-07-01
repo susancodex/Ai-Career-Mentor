@@ -21,36 +21,39 @@ class ResumeParsingError(ValueError):
     """
 
 
-def extract_text(content: bytes, filename: str) -> str:
+def extract_text(content: bytes, content_type: str) -> str:
     """
     Extract plain text from resume bytes.
 
-    Supports: .pdf (pypdf), .docx / .doc (python-docx).
+    Supports: PDF (pdfplumber), DOCX/DOC (python-docx).
     Raises ResumeParsingError on extraction failure or if the extracted text
     is too short to be useful (< MIN_TEXT_LENGTH chars) — this catches scanned
     image PDFs that parse "successfully" but produce no readable text.
     """
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-
-    if ext == "pdf":
+    if "pdf" in content_type:
         try:
-            from pypdf import PdfReader
-            reader = PdfReader(io.BytesIO(content))
-            text = "\n".join(page.extract_text() or "" for page in reader.pages)
+            import pdfplumber
+            text_chunks = []
+            with pdfplumber.open(io.BytesIO(content)) as pdf:
+                for page in pdf.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text_chunks.append(page_text)
+            text = "\n".join(text_chunks)
         except Exception as e:
-            logger.error("PDF extraction failed for %r: %s", filename, e)
+            logger.error("PDF extraction failed (content_type=%r): %s", content_type, e)
             raise ResumeParsingError(
                 "Could not read this PDF. It may be corrupted or password-protected. "
                 "Try re-saving it as a standard PDF and uploading again."
             ) from e
 
-    elif ext in ("docx", "doc"):
+    elif "wordprocessingml" in content_type or "docx" in content_type or "doc" in content_type:
         try:
             from docx import Document
             doc = Document(io.BytesIO(content))
             text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
         except Exception as e:
-            logger.error("DOCX extraction failed for %r: %s", filename, e)
+            logger.error("DOCX extraction failed (content_type=%r): %s", content_type, e)
             raise ResumeParsingError(
                 "Could not read this DOCX file. It may be corrupted. "
                 "Try re-saving it from Word and uploading again."
@@ -58,7 +61,7 @@ def extract_text(content: bytes, filename: str) -> str:
 
     else:
         raise ResumeParsingError(
-            f"Unsupported file type '.{ext}'. Please upload a PDF or DOCX file."
+            f"Unsupported file type: {content_type!r}. Please upload a PDF or DOCX file."
         )
 
     if len(text.strip()) < MIN_TEXT_LENGTH:
@@ -69,3 +72,14 @@ def extract_text(content: bytes, filename: str) -> str:
         )
 
     return text
+
+
+def content_type_from_filename(filename: str) -> str:
+    """Derive a content_type string from the file extension for callers that only have a filename."""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    mapping = {
+        "pdf": "application/pdf",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "doc": "application/msword",
+    }
+    return mapping.get(ext, f"application/{ext}")

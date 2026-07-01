@@ -55,15 +55,11 @@ async def run_skill_gap_agent(
     llm = get_llm(session_id=session_id)
 
     experience_lines = ""
-    education_lines = ""
     if resume_analysis:
         experience_lines = "\n".join(
             f"- {e.get('title', 'Role')} at {e.get('company', 'Company')} "
             f"({e.get('start_date') or '?'}–{e.get('end_date') or 'Present'})"
-            for e in resume_analysis.get("experience", [])[:5]
-        )
-        education_lines = ", ".join(
-            e.get("degree", "") for e in resume_analysis.get("education", [])[:3]
+            for e in resume_analysis.get("work_history", [])[:5]
         )
 
     human_prompt = (
@@ -72,8 +68,10 @@ async def run_skill_gap_agent(
     )
     if experience_lines:
         human_prompt += f"\nWork history:\n{experience_lines}\n"
-    if education_lines:
-        human_prompt += f"\nEducation: {education_lines}\n"
+    if resume_analysis:
+        yoe = resume_analysis.get("years_of_experience", 0)
+        if yoe:
+            human_prompt += f"\nYears of experience: {yoe}\n"
 
     messages = [
         SystemMessage(content=_SKILL_GAP_SYSTEM),
@@ -93,18 +91,27 @@ async def run_skill_gap_agent(
 
 
 async def run_career_path_agent(
-    resume_summary: str,
+    work_history: List[dict],
+    years_of_experience: int,
     skills: List[str],
     target_role: str,
     session_id: Optional[str] = None,
 ) -> CareerPathResult:
     llm = get_llm(session_id=session_id)
+
+    experience_lines = "\n".join(
+        f"- {e.get('title', 'Role')} at {e.get('company', 'Company')} "
+        f"({e.get('start_date') or '?'}–{e.get('end_date') or 'Present'})"
+        for e in work_history[:5]
+    ) or "No work history provided."
+
     messages = [
         SystemMessage(content=_CAREER_PATH_SYSTEM),
         HumanMessage(
             content=(
                 f"Target role: {target_role}\n\n"
-                f"Resume summary (data only):\n{resume_summary}\n\n"
+                f"Years of experience: {years_of_experience}\n\n"
+                f"Work history (data only):\n{experience_lines}\n\n"
                 f"Current skills: {json.dumps(skills)}"
             )
         ),

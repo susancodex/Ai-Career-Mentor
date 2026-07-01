@@ -21,7 +21,7 @@ async def skill_gaps(request: Request, body: SkillGapRequest):
     try:
         analysis = await get_resume_analysis(body.resume_id)
         result = await run_skill_gap_agent(
-            resume_skills=analysis["skills"],
+            resume_skills=analysis["extracted_skills"],
             target_role=body.target_role,
             session_id=body.resume_id,
             resume_analysis=analysis,
@@ -43,8 +43,9 @@ async def career_paths(request: Request, body: CareerPathRequest):
     try:
         analysis = await get_resume_analysis(body.resume_id)
         result = await run_career_path_agent(
-            resume_summary=analysis["summary"],
-            skills=analysis["skills"],
+            work_history=analysis["work_history"],
+            years_of_experience=analysis["years_of_experience"],
+            skills=analysis["extracted_skills"],
             target_role=body.target_role,
             session_id=body.resume_id,
         )

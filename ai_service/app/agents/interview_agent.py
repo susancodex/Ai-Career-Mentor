@@ -53,17 +53,19 @@ async def run_question_generator(
         try:
             from app.core.db import get_resume_analysis
             analysis = await get_resume_analysis(resume_id)
-            if analysis.get("skills") or analysis.get("experience"):
+            skills = analysis.get("extracted_skills", [])
+            work_history = analysis.get("work_history", [])
+            if skills or work_history:
                 experience_lines = "\n".join(
                     f"- {e.get('title', 'Role')} at {e.get('company', 'Company')} "
                     f"({e.get('start_date') or '?'}–{e.get('end_date') or 'Present'})"
-                    for e in analysis.get("experience", [])[:5]
+                    for e in work_history[:5]
                 )
                 resume_block = (
                     "\n\nCANDIDATE'S ACTUAL RESUME CONTEXT:\n"
-                    f"Skills: {', '.join(analysis.get('skills', []))}\n"
-                    f"Experience:\n{experience_lines}\n"
-                    f"Education: {', '.join(e.get('degree', '') for e in analysis.get('education', []))}\n"
+                    f"Skills: {', '.join(skills)}\n"
+                    f"Work history:\n{experience_lines}\n"
+                    f"Years of experience: {analysis.get('years_of_experience', 0)}\n"
                     "\nRequirements:\n"
                     "- At least 4 questions must reference SPECIFIC items from the resume above "
                     "(a named project, technology, company, or transition).\n"
