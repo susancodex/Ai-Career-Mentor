@@ -249,14 +249,17 @@ function ResourceItem({
   isUpdating: boolean;
   index: number;
 }) {
-  const typeConfig: Record<string, { color: string; icon: React.ElementType }> = {
-    course: { color: 'bg-purple-100 text-purple-700 border-purple-200', icon: BookOpen },
-    article: { color: 'bg-blue-100 text-blue-700 border-blue-200', icon: FileText },
-    video: { color: 'bg-rose-100 text-rose-700 border-rose-200', icon: Video },
-    project: { color: 'bg-emerald-100 text-emerald-700 border-emerald-200', icon: Code },
+  const typeConfig: Record<string, { color: string; icon: React.ElementType; label: string }> = {
+    course:            { color: 'bg-purple-100 text-purple-700 border-purple-200',  icon: BookOpen,  label: 'Course' },
+    article:           { color: 'bg-blue-100 text-blue-700 border-blue-200',        icon: FileText,  label: 'Article' },
+    video:             { color: 'bg-rose-100 text-rose-700 border-rose-200',        icon: Video,     label: 'Video' },
+    project:           { color: 'bg-emerald-100 text-emerald-700 border-emerald-200', icon: Code,    label: 'Project' },
+    documentation:     { color: 'bg-sky-100 text-sky-700 border-sky-200',           icon: FileText,  label: 'Docs' },
+    practice_platform: { color: 'bg-emerald-100 text-emerald-700 border-emerald-200', icon: Code,   label: 'Practice' },
+    book:              { color: 'bg-amber-100 text-amber-700 border-amber-200',     icon: BookOpen,  label: 'Book' },
   };
 
-  const config = typeConfig[resource.type] || { color: 'bg-slate-100 text-slate-700 border-slate-200', icon: BookOpen };
+  const config = typeConfig[resource.type] || { color: 'bg-slate-100 text-slate-700 border-slate-200', icon: BookOpen, label: resource.type };
   const Icon = config.icon;
 
   return (
@@ -283,12 +286,17 @@ function ResourceItem({
             <div className="flex items-center gap-3 mb-2">
               <span className={`flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider px-2.5 py-1 rounded-md border ${config.color}`}>
                 <Icon className="w-3.5 h-3.5" />
-                {resource.type}
+                {config.label}
               </span>
               <span className="text-sm font-medium text-slate-500 flex items-center gap-1">
                 <Clock className="w-4 h-4" />
                 {resource.estimated_hours}h
               </span>
+              {resource.skill_name && (
+                <span className="text-xs font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">
+                  {resource.skill_name}
+                </span>
+              )}
             </div>
             <p className={`text-lg font-bold leading-snug ${resource.completed ? 'text-slate-500 line-through decoration-slate-300 decoration-2' : 'text-slate-900'}`}>
               {resource.title}

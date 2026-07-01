@@ -132,11 +132,12 @@ export interface LearningResource {
   id: string;
   roadmap_id: string;
   title: string;
-  type: 'course' | 'article' | 'video' | 'project';
+  type: 'course' | 'article' | 'video' | 'project' | 'documentation' | 'practice_platform';
   url?: string;
   estimated_hours: number;
   completed: boolean;
   order_index: number;
+  skill_name?: string;
 }
 
 export interface ChatSession {

@@ -11,7 +11,7 @@ class LearningResourceSerializer(serializers.ModelSerializer):
         model = LearningResource
         fields = (
             "id", "roadmap_id", "title", "type", "url",
-            "estimated_hours", "completed", "order_index", "created_at",
+            "estimated_hours", "completed", "order_index", "skill_name", "created_at",
         )
 
 

@@ -1,0 +1,48 @@
+Verification:
+
+bash# Generate skill-builder plan for two very different missing skills
+curl -s -X POST http://localhost/api/v1/skills/build-plan/ \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"skill_name":"Kubernetes","target_role":"DevOps Engineer"}' | python3 -m json.tool > /tmp/skill_k8s.json
+
+curl -s -X POST http://localhost/api/v1/skills/build-plan/ \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"skill_name":"Public Speaking","target_role":"Engineering Manager"}' | python3 -m json.tool > /tmp/skill_speaking.json
+
+diff /tmp/skill_k8s.json /tmp/skill_speaking.json
+# Expect: completely different resources, not the same generic links
+
+# Mark a resource complete, then refetch — progress must persist
+PROGRESS_ID="<from skill_k8s.json>"
+curl -s -X POST http://localhost/api/v1/skills/$PROGRESS_ID/resources/0/complete/ \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+
+curl -s http://localhost/api/v1/skills/$PROGRESS_ID/ -H "Authorization: Bearer $TOKEN" \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print('Resource 0 completed:', d['resources'][0]['completed'])"
+# Expect: True
+
+# Logout, login again, refetch — must still show completed:true (real DB persistence)
+
+STOP — resources must be skill-specific, and completion state must survive logout/login.
+
+
+2.6 AI Career Coach (Chat) — Must Use Real Conversation Memory and Real User Context
+
+How to tell it's fake: The coach gives generic advice unrelated to anything in the
+user's resume or prior messages; asking a follow-up question ("what about that gap you
+mentioned?") produces a response that ignores the earlier turn; the same question asked
+twice in a row produces wildly different, contradictory advice (a sign there's no real
+grounding — it's just free-floating generation).
+
+What "real" looks like:
+
+1. Every chat session is grounded with real user context at the system-prompt level:
+   resume summary, target role, recent career-path/job-match activity — injected
+   server-side, not something the user has to repeat themselves
+2. Full conversation history (or a real summarized window of it) is sent with every
+   request — not just the latest message in isolation
+3. The coach can reference specific things from the user's actual data
+   ("I see from your resume you have 3 years of React — for the senior role you're
+   targeting, let's talk about system design depth")
+4. Responses to the same question should be consistent in substance (not necessarily
+   word-for-word, but not contradictory) given unchanged context

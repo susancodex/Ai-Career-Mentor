@@ -13,6 +13,7 @@ class LearningResourceItem(BaseModel):
 
 class LearningRoadmapResult(BaseModel):
     title: str = ""
+    description: str = ""
     resources: List[LearningResourceItem] = Field(default_factory=list)
 
 
