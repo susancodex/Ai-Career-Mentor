@@ -27,7 +27,7 @@ Analyse skill gaps between the candidate's resume and the target role. When curr
 Return ONLY a JSON object:
 {
   "missing_skills": ["skill the candidate lacks that the role requires"],
-  "existing_skills": ["skill the candidate already has that's relevant"],
+  "matched_skills": ["skill the candidate already has that's relevant"],
   "transferable_skills": ["skill from a different domain that partially satisfies a requirement — explain briefly, e.g. 'SQL → data querying logic transfers to NoSQL'"],
   "gap_severity": "minor|moderate|significant",
   "analysis": "2-3 sentences grounded in the specific skills listed above — never generic advice"
@@ -88,7 +88,7 @@ async def run_skill_gap_agent(
     if experience_lines:
         human_prompt += f"\nWork history:\n{experience_lines}\n"
     if resume_analysis:
-        yoe = resume_analysis.get("years_of_experience", 0)
+        yoe = resume_analysis.get("years_of_experience", 0) or resume_analysis.get("years_experience", 0)
         if yoe:
             human_prompt += f"\nYears of experience: {yoe}\n"
     if market_requirements:
@@ -112,7 +112,15 @@ async def run_skill_gap_agent(
 
     if result is None:
         raise ValueError(f"Career agent skill-gap failed for target_role={target_role}")
+
+    # Map matched_skills to existing_skills and vice versa to satisfy compatibility
+    if result.matched_skills and not result.existing_skills:
+        result.existing_skills = result.matched_skills
+    elif result.existing_skills and not result.matched_skills:
+        result.matched_skills = result.existing_skills
+
     return result
+
 
 
 async def run_career_path_agent(

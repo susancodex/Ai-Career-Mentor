@@ -30,6 +30,7 @@ async def interview_coach_node(state: CareerMentorState) -> CareerMentorState:
                 target_role=state.get("target_role") or "",
                 session_id=session_id,
                 resume_id=resume_id,
+                resume_profile=profile,
             )
             return {**state, "interview_output": result.model_dump()}
         else:

@@ -77,13 +77,36 @@ async def run_question_generator(
     agent_session_id: Optional[str] = None,
     resume_id: Optional[str] = None,
     years_experience: int = 0,
+    resume_profile: Optional[dict] = None,
 ) -> InterviewQuestionsResult:
     llm = get_llm(session_id=agent_session_id)
 
     seniority = _seniority_label(years_experience)
     resume_block = f"\nCANDIDATE SENIORITY: {seniority}\n"
 
-    if resume_id:
+    if resume_profile:
+        skills = resume_profile.get("extracted_skills") or resume_profile.get("skills") or []
+        work_history = resume_profile.get("work_history", [])
+        actual_years = resume_profile.get("years_of_experience") or resume_profile.get("years_experience") or years_experience
+        seniority = _seniority_label(actual_years)
+
+        if skills or work_history:
+            history_lines = "\n".join(
+                f"- {e.get('title', 'Role')} at {e.get('company', 'Company')} "
+                f"({e.get('start_date') or '?'}–{e.get('end_date') or 'Present'})"
+                for e in work_history[:8]
+            )
+            resume_block = (
+                f"\nCANDIDATE SENIORITY: {seniority}\n"
+                f"\nCANDIDATE'S ACTUAL WORK HISTORY (use these specific details for resume_specific questions):\n"
+                f"{history_lines}\n"
+                f"\nSKILLS LISTED ON RESUME: {', '.join(skills[:30])}\n"
+            )
+            logger.debug(
+                "Resume context loaded from state for session %s: %d skills, %d work entries",
+                session_id, len(skills), len(work_history),
+            )
+    elif resume_id:
         try:
             from app.core.db import get_resume_analysis
             analysis = await get_resume_analysis(resume_id)
@@ -105,7 +128,7 @@ async def run_question_generator(
                     f"\nSKILLS LISTED ON RESUME: {', '.join(skills[:30])}\n"
                 )
                 logger.debug(
-                    "Resume context loaded for session %s: %d skills, %d work entries",
+                    "Resume context loaded from db for session %s: %d skills, %d work entries",
                     session_id, len(skills), len(work_history),
                 )
         except Exception:

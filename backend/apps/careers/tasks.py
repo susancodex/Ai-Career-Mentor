@@ -173,3 +173,143 @@ def generate_skill_gaps(self, user_id: str, resume_id: str, target_role: str):
             pass
 
         raise self.retry(exc=exc)
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def run_full_career_analysis(self, user_id: str, resume_id: str, target_role: str):
+    """Unified graph dispatch for full career analysis. Runs job research, skill gap, career paths, and roadmap together."""
+    try:
+        resume = Resume.objects.get(pk=resume_id, user_id=user_id)
+        
+        try:
+            analysis = ResumeAnalysis.objects.get(resume_id=resume_id)
+            existing_skills = analysis.extracted_skills or []
+        except ResumeAnalysis.DoesNotExist:
+            logger.warning("No ResumeAnalysis for resume %s", resume_id)
+            existing_skills = []
+
+        if not existing_skills:
+            raise InsufficientDataError("Upload and parse a resume first — career analysis requires your actual current skills.")
+
+        location_preference = None
+        try:
+            from apps.users.models import Profile
+            profile = Profile.objects.get(user_id=user_id)
+            location_preference = profile.location or None
+        except Exception:
+            pass
+
+        # Use unified /agents/run/ endpoint
+        result = call_ai_service(
+            "POST",
+            "/api/v1/agents/run/",
+            payload={
+                "user_id": user_id,
+                "resume_text": analysis.raw_extracted_text if 'analysis' in locals() else resume.raw_text,
+                "target_role": target_role,
+                "location_preference": location_preference,
+                "requested_outputs": ["career_path", "skill_gap", "learning_roadmap"],
+            },
+        )
+        
+        # 207 handling
+        errors = result.get("errors") or []
+        data = result.get("results") or result
+
+        # 1. Skill Gap
+        skill_gap_data = data.get("skill_gap")
+        skill_gap = None
+        if skill_gap_data:
+            skill_gap, _ = SkillGap.objects.update_or_create(
+                user_id=user_id,
+                resume=resume,
+                target_role=target_role,
+                defaults={
+                    "missing_skills": skill_gap_data.get("missing_skills", []),
+                    "existing_skills": skill_gap_data.get("existing_skills", []),
+                    "skill_levels": skill_gap_data.get("skill_levels", {}),
+                    "analysis": skill_gap_data.get("analysis", ""),
+                },
+            )
+
+        # 2. Career Path
+        career_path_data = data.get("career_path")
+        if career_path_data:
+            CareerPath.objects.update_or_create(
+                user_id=user_id,
+                resume=resume,
+                target_role=target_role,
+                defaults={
+                    "paths_json": career_path_data.get("paths", []),
+                    "recommended_path_index": career_path_data.get("recommended_path_index", 0),
+                    "summary": career_path_data.get("summary", ""),
+                },
+            )
+
+        # 3. Learning Roadmap
+        roadmap_data = data.get("learning_roadmap")
+        if roadmap_data and skill_gap:
+            from apps.learning.models import LearningRoadmap, LearningResource
+            roadmap = LearningRoadmap.objects.create(
+                user_id=user_id,
+                skill_gap=skill_gap,
+                title=roadmap_data.get("title", f"Roadmap for {skill_gap.target_role}"),
+                description=roadmap_data.get("description", ""),
+                estimated_hours=roadmap_data.get("estimated_hours"),
+            )
+            for i, r in enumerate(roadmap_data.get("resources", [])):
+                LearningResource.objects.create(
+                    roadmap=roadmap,
+                    title=r.get("title", ""),
+                    url=r.get("url", ""),
+                    resource_type=r.get("resource_type", ""),
+                    estimated_hours=r.get("estimated_hours"),
+                    order=r.get("order", i),
+                    skill_name=r.get("skill_name", ""),
+                )
+
+        from apps.jobs.models import AsyncJob
+        try:
+            job = AsyncJob.objects.filter(celery_task_id=self.request.id).first()
+            if job:
+                if errors:
+                    job.status = AsyncJob.Status.FAILED
+                    job.error_message = f"Partial failure: {', '.join(errors)}"
+                else:
+                    job.status = AsyncJob.Status.SUCCESS
+                job.save(update_fields=["status", "error_message"])
+        except Exception:
+            pass
+            
+    except InsufficientDataError as exc:
+        logger.warning("Career analysis aborted for resume=%s: %s", resume_id, exc)
+        from apps.jobs.models import AsyncJob
+        try:
+            job = AsyncJob.objects.filter(celery_task_id=self.request.id).first()
+            if job:
+                job.status = AsyncJob.Status.FAILED
+                job.error_message = str(exc)
+                job.save(update_fields=["status", "error_message"])
+        except Exception:
+            pass
+        return
+
+    except Exception as exc:
+        logger.exception("Full career analysis failed for resume=%s", resume_id)
+        status_code = None
+        cause = getattr(exc, "response", getattr(exc, "__cause__", None))
+        if hasattr(cause, "status_code"):
+            status_code = cause.status_code
+        error_msg = GEMINI_ERROR_MESSAGES.get(status_code, "Processing failed. Try again.")
+
+        from apps.jobs.models import AsyncJob
+        try:
+            job = AsyncJob.objects.filter(celery_task_id=self.request.id).first()
+            if job:
+                job.status = AsyncJob.Status.FAILED
+                job.error_message = error_msg
+                job.save(update_fields=["status", "error_message"])
+        except Exception:
+            pass
+
+        raise self.retry(exc=exc)

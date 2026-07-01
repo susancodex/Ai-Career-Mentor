@@ -12,31 +12,32 @@ from unittest.mock import AsyncMock, patch, MagicMock
 
 MOCK_RESPONSE = json.dumps({
     "skills": ["Python", "Django", "FastAPI"],
-    "experience": [
+    "years_experience": 3,
+    "work_history": [
         {
             "title": "Backend Engineer",
             "company": "TechCorp",
             "start_date": "2021-01",
             "end_date": "2024-01",
-            "description": "Built REST APIs",
-            "technologies": ["Python", "Django"]
+            "description": "Built REST APIs"
         }
     ],
+    "certifications": ["AWS Solutions Architect"],
     "education": [
         {
             "degree": "BSc Computer Science",
             "institution": "MIT",
-            "year": "2020",
-            "field_of_study": "Computer Science"
+            "major": "Computer Science",
+            "graduation_year": "2020"
         }
     ],
-    "summary": "Experienced backend engineer.",
+    "achievements": ["Built core services"]
 })
 
 
 @pytest.mark.asyncio
 async def test_resume_agent_parses_valid_llm_response():
-    """Agent parses valid LLM JSON into a ResumeAnalysisResult."""
+    """Agent parses valid LLM JSON into a ResumeProfile."""
     mock_llm_response = MagicMock()
     mock_llm_response.content = MOCK_RESPONSE
 
@@ -51,13 +52,13 @@ async def test_resume_agent_parses_valid_llm_response():
 
         from app.agents.resume_agent import run_resume_agent
         result = await run_resume_agent(
-            raw_text="John Doe\nBackend Engineer at TechCorp\nPython, Django",
+            raw_text="John Doe\nBackend Engineer at TechCorp\nPython, Django, FastAPI and other tech skills that make this text long enough.",
             resume_id="test-resume-id",
         )
 
     assert result.skills == ["Python", "Django", "FastAPI"]
-    assert len(result.experience) == 1
-    assert result.experience[0].title == "Backend Engineer"
+    assert len(result.work_history) == 1
+    assert result.work_history[0].title == "Backend Engineer"
     assert len(result.embedding) == 768
     # Verify the LLM was actually called (proves plumbing, not output quality)
     mock_invoke.assert_called_once()
@@ -83,7 +84,7 @@ async def test_resume_agent_retries_on_schema_mismatch():
 
         from app.agents.resume_agent import run_resume_agent
         result = await run_resume_agent(
-            raw_text="Some resume text",
+            raw_text="Some resume text that is at least fifty characters long to pass validation check successfully.",
             resume_id="test-repair-id",
         )
 
@@ -108,4 +109,8 @@ async def test_resume_agent_raises_after_repair_failure():
 
         from app.agents.resume_agent import run_resume_agent
         with pytest.raises(ValueError, match="valid output"):
-            await run_resume_agent(raw_text="text", resume_id="failing-id")
+            await run_resume_agent(
+                raw_text="Some resume text that is at least fifty characters long to pass validation check successfully.",
+                resume_id="failing-id"
+            )
+

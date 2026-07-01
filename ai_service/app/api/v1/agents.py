@@ -1,14 +1,13 @@
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.core.security import verify_internal_signature
-from app.graph.build import build_career_mentor_graph
+from app.graph.build import get_graph
 
 router = APIRouter(prefix="/agents", tags=["agents"])
-
-_graph = build_career_mentor_graph()
 
 
 class AgentRunRequest(BaseModel):
@@ -38,7 +37,7 @@ async def run_agent_graph(request: AgentRunRequest, _=Depends(verify_internal_si
         "errors": [],
     }
     try:
-        final = await _graph.ainvoke(initial)
+        final = await get_graph().ainvoke(initial)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -46,11 +45,18 @@ async def run_agent_graph(request: AgentRunRequest, _=Depends(verify_internal_si
         ) from exc
 
     if final.get("errors"):
-        return {
-            "partial": True,
-            "errors": final["errors"],
-            "results": {k: v for k, v in final.items() if k not in ("resume_text", "errors")},
-        }
+        # HTTP 207 Multi-Status: some agents succeeded, some failed.
+        # The Django backend checks status_code to distinguish full
+        # success (200) from partial failure (207).
+        return JSONResponse(
+            status_code=207,
+            content={
+                "partial": True,
+                "errors": final["errors"],
+                "results": {k: v for k, v in final.items()
+                            if k not in ("resume_text", "errors")},
+            },
+        )
 
     return {k: v for k, v in final.items() if k not in ("resume_text", "errors")}
 
@@ -78,7 +84,7 @@ async def run_interview_agent(request: InterviewRunRequest, _=Depends(verify_int
         },
     }
     try:
-        final = await _graph.ainvoke(state)
+        final = await get_graph().ainvoke(state)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

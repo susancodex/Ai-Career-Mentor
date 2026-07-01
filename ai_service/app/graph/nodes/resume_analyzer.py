@@ -7,6 +7,10 @@ logger = logging.getLogger(__name__)
 
 
 async def resume_analyzer_node(state: CareerMentorState) -> CareerMentorState:
+    if state.get("resume_profile"):
+        logger.info("Resume profile already in state, skipping resume analyzer node.")
+        return state
+
     try:
         profile = await run_resume_agent(
             raw_text=state["resume_text"],
@@ -17,3 +21,4 @@ async def resume_analyzer_node(state: CareerMentorState) -> CareerMentorState:
     except Exception as e:
         logger.exception("Resume analyzer node failed")
         return {**state, "errors": state.get("errors", []) + [f"resume_analyzer: {e}"]}
+

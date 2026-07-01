@@ -89,3 +89,18 @@ def build_career_mentor_graph() -> StateGraph:
     graph.add_edge("ats_optimizer_node", END)
 
     return graph.compile()
+
+
+# ── Graph singleton ──────────────────────────────────────────────────
+# All endpoint files should import get_graph() instead of calling
+# build_career_mentor_graph() directly.  This avoids compiling the
+# graph multiple times (once per endpoint module) at import time.
+_compiled_graph = None
+
+
+def get_graph():
+    """Return the compiled career-mentor graph (lazily built, cached)."""
+    global _compiled_graph
+    if _compiled_graph is None:
+        _compiled_graph = build_career_mentor_graph()
+    return _compiled_graph

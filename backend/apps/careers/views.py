@@ -8,7 +8,7 @@ from apps.resumes.models import Resume
 from core.tasks import safe_apply_async
 from .models import CareerPath, SkillGap
 from .serializers import CareerPathSerializer, SkillGapSerializer
-from .tasks import generate_career_paths
+from .tasks import run_full_career_analysis
 
 
 class CareerPathGenerateView(APIView):
@@ -59,8 +59,8 @@ class CareerPathGenerateView(APIView):
 
         job_id = str(uuid.uuid4())
         safe_apply_async(
-            generate_career_paths,
-            args=[str(request.user.id), str(resume_id), target_role, job_id],
+            run_full_career_analysis,
+            args=[str(request.user.id), str(resume_id), target_role],
             task_id=job_id,
         )
         return Response({"job_id": job_id}, status=status.HTTP_202_ACCEPTED)

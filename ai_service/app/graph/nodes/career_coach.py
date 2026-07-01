@@ -17,12 +17,13 @@ async def career_coach_node(state: CareerMentorState) -> CareerMentorState:
     try:
         result = await run_career_path_agent(
             work_history=profile.get("work_history", []),
-            years_of_experience=profile.get("years_of_experience", 0),
-            skills=profile.get("extracted_skills", []),
+            years_of_experience=profile.get("years_experience") or profile.get("years_of_experience") or 0,
+            skills=profile.get("skills") or profile.get("extracted_skills") or [],
             target_role=state.get("target_role") or "",
             missing_skills=missing_skills,
             gap_severity=gap_severity,
         )
+
         return {**state, "career_path": result.model_dump()}
     except Exception as e:
         logger.exception("Career coach node failed")

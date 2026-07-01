@@ -64,12 +64,14 @@ async def ats_optimizer_node(state: CareerMentorState) -> CareerMentorState:
 
     except Exception as exc:
         logger.warning("ATS optimizer LLM call failed: %s", exc)
+        errors = state.get("errors", []) + [f"ats_optimizer: {exc}"]
         feedback = {
             "ats_compatibility_score": 0,
             "formatting_issues": [f"Analysis temporarily unavailable: {exc}"],
             "keyword_gaps": [],
             "rewritten_bullet_suggestions": [],
         }
+        return {**state, "ats_feedback": feedback, "errors": errors}
 
     return {**state, "ats_feedback": feedback}
 

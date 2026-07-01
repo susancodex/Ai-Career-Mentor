@@ -158,7 +158,7 @@ CELERY_BROKER_TRANSPORT_OPTIONS = {
 CORS_ALLOW_ALL_ORIGINS = DEBUG
 CORS_ALLOWED_ORIGINS = env.list(
     "CORS_ALLOWED_ORIGINS",
-    default=["http://localhost:5173", "http://localhost"],
+    default=["http://localhost:5173", "http://localhost:5001", "http://localhost"],
 )
 CORS_ALLOW_CREDENTIALS = True
 CORS_EXPOSE_HEADERS = ["Content-Type", "X-CSRFToken"]

@@ -43,8 +43,13 @@ async def test_get_resume_analysis_returns_correct_fields():
     import app.core.db as db_module
 
     row = {
-        "skills": ["Python", "Django"],
-        "summary": "Experienced engineer.",
+        "extracted_skills": ["Python", "Django"],
+        "years_of_experience": 3,
+        "work_history": [{"company": "TechCorp", "title": "Developer"}],
+        "strengths": ["Fast learner"],
+        "gaps": ["No Java"],
+        "ats_issues": ["PDF version"],
+        "overall_score": 80,
         "embedding": [0.1] * 768,
     }
     pool = _make_pool_with_row(row)
@@ -52,8 +57,8 @@ async def test_get_resume_analysis_returns_correct_fields():
     with patch.object(db_module, "_pool", pool):
         result = await db_module.get_resume_analysis("some-resume-id")
 
-    assert result["skills"] == ["Python", "Django"]
-    assert result["summary"] == "Experienced engineer."
+    assert result["extracted_skills"] == ["Python", "Django"]
+    assert result["years_of_experience"] == 3
     assert len(result["embedding"]) == 768
     pool.fetchrow.assert_called_once()
 
@@ -64,8 +69,13 @@ async def test_get_resume_analysis_json_string_columns():
     import app.core.db as db_module
 
     row = {
-        "skills": json.dumps(["TypeScript", "React"]),
-        "summary": "Frontend dev.",
+        "extracted_skills": json.dumps(["TypeScript", "React"]),
+        "years_of_experience": 2,
+        "work_history": json.dumps([]),
+        "strengths": json.dumps([]),
+        "gaps": json.dumps([]),
+        "ats_issues": json.dumps([]),
+        "overall_score": 75,
         "embedding": json.dumps([0.5] * 768),
     }
     pool = _make_pool_with_row(row)
@@ -73,7 +83,7 @@ async def test_get_resume_analysis_json_string_columns():
     with patch.object(db_module, "_pool", pool):
         result = await db_module.get_resume_analysis("json-str-id")
 
-    assert result["skills"] == ["TypeScript", "React"]
+    assert result["extracted_skills"] == ["TypeScript", "React"]
     assert len(result["embedding"]) == 768
 
 
@@ -86,7 +96,7 @@ async def test_get_resume_analysis_missing_row_returns_empty():
     with patch.object(db_module, "_pool", pool):
         result = await db_module.get_resume_analysis("missing-id")
 
-    assert result == {"skills": [], "summary": "", "embedding": []}
+    assert result == db_module._EMPTY_ANALYSIS
 
 
 @pytest.mark.asyncio
@@ -97,7 +107,7 @@ async def test_get_resume_analysis_no_pool_returns_empty():
     with patch.object(db_module, "_pool", None):
         result = await db_module.get_resume_analysis("no-pool-id")
 
-    assert result == {"skills": [], "summary": "", "embedding": []}
+    assert result == db_module._EMPTY_ANALYSIS
 
 
 @pytest.mark.asyncio
@@ -111,7 +121,8 @@ async def test_get_resume_analysis_db_error_returns_empty():
     with patch.object(db_module, "_pool", pool):
         result = await db_module.get_resume_analysis("err-id")
 
-    assert result == {"skills": [], "summary": "", "embedding": []}
+    assert result == db_module._EMPTY_ANALYSIS
+
 
 
 # ---------------------------------------------------------------------------

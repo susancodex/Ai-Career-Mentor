@@ -75,12 +75,14 @@ async def job_research_node(state: CareerMentorState) -> CareerMentorState:
 
     except Exception as exc:
         logger.warning("Job research LLM call failed: %s", exc)
+        errors = state.get("errors", []) + [f"job_research: {exc}"]
         market_data = {
             "current_market_requirements": [],
             "typical_salary_range": {},
             "real_job_listings": [],
             "trend_summary": "Market data temporarily unavailable.",
         }
+        return {**state, "market_data": market_data, "errors": errors}
 
     return {**state, "market_data": market_data}
 
