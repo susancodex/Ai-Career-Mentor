@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { generateJobMatches, getJobMatches, updateJobMatch } from '../../api/jobs';
@@ -51,17 +51,44 @@ export function JobsPage() {
     refetchIntervalInBackground: false,
   });
 
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    };
+  }, []);
+
   const generateMutation = useMutation({
     mutationFn: () => generateJobMatches(selectedResumeId),
     onMutate: () => {
       setRateLimitError(null);
       setIsGenerating(true);
     },
-    onSuccess: () => {
-      setTimeout(() => {
+    onSuccess: (data) => {
+      const jobId = (data as { job_id?: string }).job_id;
+      if (!jobId) {
         setIsGenerating(false);
         queryClient.invalidateQueries({ queryKey: ['job-matches'] });
-      }, 2000);
+        return;
+      }
+      const poll = async () => {
+        try {
+          const statusResult = await getAsyncJobStatus(jobId);
+          if (statusResult.status === 'done') {
+            setIsGenerating(false);
+            queryClient.invalidateQueries({ queryKey: ['job-matches'] });
+          } else if (statusResult.status === 'failed') {
+            setIsGenerating(false);
+            setRateLimitError('Job matching failed. Please try again.');
+          } else {
+            pollTimerRef.current = setTimeout(poll, 2000);
+          }
+        } catch {
+          pollTimerRef.current = setTimeout(poll, 2000);
+        }
+      };
+      pollTimerRef.current = setTimeout(poll, 1500);
     },
     onError: (error: Error) => {
       setIsGenerating(false);
